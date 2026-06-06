@@ -1,0 +1,6 @@
+anthropic>=0.30.0
+playwright>=1.44.0
+twilio>=9.2.0
+supabase>=2.5.0
+python-dotenv>=1.0.0
+imapclient>=3.0.1
