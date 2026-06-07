@@ -78,7 +78,7 @@ def fmt_dt(ts) -> str:
     except Exception:
         return str(ts)
 
-def render(subset: pd.DataFrame):
+def render(subset: pd.DataFrame, tab: str = ""):
     if subset.empty:
         st.info("Nothing here yet.")
         return
@@ -115,7 +115,7 @@ def render(subset: pd.DataFrame):
 
             with right:
                 if not is_invited:
-                    if st.button("Send Invite", key=f"inv_{r['id']}", type="primary",
+                    if st.button("Send Invite", key=f"inv_{tab}_{r['id']}", type="primary",
                                  help="Sends SMS + email with Calendly link"):
                         with st.spinner("Sending..."):
                             do_invite(r["id"], r["name"],
@@ -131,7 +131,7 @@ def render(subset: pd.DataFrame):
                 st.write("")
 
                 if not is_booked:
-                    if st.button("Mark Calendly Booked", key=f"book_{r['id']}"):
+                    if st.button("Mark Calendly Booked", key=f"book_{tab}_{r['id']}"):
                         do_mark_booked(r["id"])
                         st.rerun()
                 else:
@@ -142,13 +142,13 @@ def render(subset: pd.DataFrame):
 tab_all, tab_qual, tab_inv, tab_dq = st.tabs(["All", "Qualified", "Invited", "Auto-DQ"])
 
 with tab_all:
-    render(df)
+    render(df, "all")
 
 with tab_qual:
-    render(df[~df["auto_disqualified"].fillna(False) & (df["score"].fillna(0) >= config.SCORE_NOTIFY_THRESHOLD)])
+    render(df[~df["auto_disqualified"].fillna(False) & (df["score"].fillna(0) >= config.SCORE_NOTIFY_THRESHOLD)], "qual")
 
 with tab_inv:
-    render(df[(df["sms_sid"].fillna("") != "") | df["manually_invited"].fillna(False)])
+    render(df[(df["sms_sid"].fillna("") != "") | df["manually_invited"].fillna(False)], "inv")
 
 with tab_dq:
-    render(df[df["auto_disqualified"].fillna(False)])
+    render(df[df["auto_disqualified"].fillna(False)], "dq")
