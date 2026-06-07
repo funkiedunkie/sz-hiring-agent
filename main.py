@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import os
 import sys
 
 import config
@@ -12,10 +13,15 @@ from notifications.sms_sender import send_interview_invite
 from scrapers.careerplug import scrape_application
 from triggers.email_trigger import poll_once
 
+_log_dir = os.path.join(os.path.dirname(__file__), "logs")
+os.makedirs(_log_dir, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(name)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(os.path.join(_log_dir, "agent.log"), encoding="utf-8"),
+    ],
 )
 logger = logging.getLogger(__name__)
 
