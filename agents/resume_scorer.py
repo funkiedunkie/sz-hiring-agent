@@ -108,11 +108,12 @@ def score_candidate(application_text: str, candidate_name: str = "") -> ScoreRes
         auto_disqualified = True
         reasoning = f"Parsing error — raw response: {raw[:300]}"
 
-    stars = "⭐" * score if score else "AUTO-DQ"
+    stars = "*" * score if score else "AUTO-DQ"
     logger.info(
-        "Score for '%s': %s | auto_dq=%s",
+        "Score for '%s': %s (%d/4) | auto_dq=%s",
         candidate_name or "unknown",
         stars,
+        score,
         auto_disqualified,
     )
     return ScoreResult(

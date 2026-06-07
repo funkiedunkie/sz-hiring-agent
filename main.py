@@ -48,7 +48,7 @@ def run(dry_run: bool = False) -> None:
             candidate_name=applicant.name,
         )
 
-        stars = "*" * result.score if result.score else "AUTO-DQ"
+        stars = "*" * result.score if result.score else "AUTO-DQ"  # avoid emoji for Windows cp1252
         logger.info("Score: %s | auto_dq: %s | %s", stars, result.auto_disqualified, result.reasoning[:120])
 
         sms_sid = ""
