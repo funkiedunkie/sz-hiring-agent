@@ -32,6 +32,17 @@ def run(dry_run: bool = False) -> None:
 
     logger.info("%d trigger email(s) found", len(trigger_emails))
 
+    # Deduplicate by URL — multiple emails can point to the same application
+    seen_urls: set[str] = set()
+    unique_triggers = []
+    for t in trigger_emails:
+        if t.app_url not in seen_urls:
+            seen_urls.add(t.app_url)
+            unique_triggers.append(t)
+    if len(unique_triggers) < len(trigger_emails):
+        logger.info("Deduplicated to %d unique URL(s)", len(unique_triggers))
+    trigger_emails = unique_triggers
+
     for trigger in trigger_emails:
         logger.info("Processing: %s -> %s", trigger.subject, trigger.app_url)
 
