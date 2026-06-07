@@ -7,6 +7,7 @@ Message template:
 """
 
 import logging
+import re
 
 from twilio.rest import Client
 
@@ -22,6 +23,16 @@ MESSAGE_TEMPLATE = (
 )
 
 
+def _normalize_phone(phone: str) -> str:
+    """Normalize a US phone number to E.164 format (+1XXXXXXXXXX)."""
+    digits = re.sub(r"\D", "", phone)
+    if len(digits) == 10:
+        return f"+1{digits}"
+    if len(digits) == 11 and digits[0] == "1":
+        return f"+{digits}"
+    return phone  # pass through and let Twilio validate
+
+
 def send_interview_invite(candidate_name: str, candidate_phone: str) -> str:
     """
     Send the standard interview invite SMS to *candidate_phone*.
@@ -31,6 +42,7 @@ def send_interview_invite(candidate_name: str, candidate_phone: str) -> str:
         logger.warning("No phone number for '%s' — skipping SMS", candidate_name)
         return ""
 
+    normalized = _normalize_phone(candidate_phone)
     first_name = candidate_name.split()[0] if candidate_name else "there"
 
     body = MESSAGE_TEMPLATE.format(
@@ -42,12 +54,13 @@ def send_interview_invite(candidate_name: str, candidate_phone: str) -> str:
         message = _client.messages.create(
             body=body,
             from_=config.TWILIO_FROM_NUMBER,
-            to=candidate_phone,
+            to=normalized,
         )
         logger.info(
-            "Interview invite sent to %s (%s), SID: %s",
+            "Interview invite sent to %s (%s -> %s), SID: %s",
             candidate_name,
             candidate_phone,
+            normalized,
             message.sid,
         )
         return message.sid

@@ -34,6 +34,12 @@ _client: Client = create_client(config.SUPABASE_URL, config.SUPABASE_SERVICE_ROL
 TABLE = "applicants"
 
 
+def check_applicant_exists(profile_url: str) -> bool:
+    """Return True if an applicant with this profile_url is already in the database."""
+    resp = _client.table(TABLE).select("id").eq("profile_url", profile_url).execute()
+    return len(resp.data) > 0
+
+
 def log_applicant(
     name: str,
     email: str,
