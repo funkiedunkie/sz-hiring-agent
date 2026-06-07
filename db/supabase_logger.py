@@ -4,19 +4,19 @@ Persists applicant records and scoring results to Supabase.
 Expected table schema (run once in the Supabase SQL editor):
 
     create table if not exists applicants (
-        id              uuid primary key default gen_random_uuid(),
-        created_at      timestamptz default now(),
-        name            text not null,
-        email           text,
-        job_title       text,
-        applied_at      text,
-        resume_text     text,
-        profile_url     text,
-        score           int,
-        rationale       text,
-        score_model     text,
-        sms_sid         text,
-        trigger_subject text
+        id                uuid primary key default gen_random_uuid(),
+        created_at        timestamptz default now(),
+        name              text not null,
+        email             text,
+        phone             text,
+        profile_url       text,
+        application_text  text,
+        score             int,          -- 1–4 stars; 0 = auto-disqualified
+        auto_disqualified boolean default false,
+        reasoning         text,
+        score_model       text,
+        sms_sid           text,
+        trigger_subject   text
     );
 """
 
@@ -37,25 +37,26 @@ TABLE = "applicants"
 def log_applicant(
     name: str,
     email: str,
-    job_title: str,
-    applied_at: str,
-    resume_text: str,
+    phone: str,
     profile_url: str,
+    application_text: str,
     score: int,
-    rationale: str,
+    auto_disqualified: bool,
+    reasoning: str,
     score_model: str,
     sms_sid: str = "",
     trigger_subject: str = "",
 ) -> dict[str, Any]:
+    """Insert a new applicant row and return the inserted record."""
     record = {
         "name": name,
         "email": email,
-        "job_title": job_title,
-        "applied_at": applied_at,
-        "resume_text": resume_text,
+        "phone": phone,
         "profile_url": profile_url,
+        "application_text": application_text,
         "score": score,
-        "rationale": rationale,
+        "auto_disqualified": auto_disqualified,
+        "reasoning": reasoning,
         "score_model": score_model,
         "sms_sid": sms_sid,
         "trigger_subject": trigger_subject,
@@ -64,5 +65,11 @@ def log_applicant(
     response = _client.table(TABLE).insert(record).execute()
 
     inserted = response.data[0] if response.data else {}
-    logger.info("Logged applicant '%s' → row id: %s", name, inserted.get("id"))
+    logger.info(
+        "Logged applicant '%s' → id: %s | score: %s | auto_dq: %s",
+        name,
+        inserted.get("id"),
+        score,
+        auto_disqualified,
+    )
     return inserted

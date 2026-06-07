@@ -1,75 +1,126 @@
-"""
-Polls an IMAP mailbox for emails whose subject contains the configured
-trigger string (default: "New Application").  Returns structured dicts
-so the caller can decide what to do with each match.
-"""
+import requests
+import time
+import re
+from config import (
+    GRAPH_TENANT_ID,
+    GRAPH_CLIENT_ID,
+    GRAPH_CLIENT_SECRET,
+    GRAPH_USER_EMAIL,
+    EMAIL_TRIGGER_SUBJECT,
+)
 
-import email
-import logging
-from dataclasses import dataclass, field
-from email.header import decode_header
-from typing import Generator
-
-from imapclient import IMAPClient
-
-import config
-
-logger = logging.getLogger(__name__)
+GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+TOKEN_URL = f"https://login.microsoftonline.com/{GRAPH_TENANT_ID}/oauth2/v2.0/token"
 
 
-@dataclass
-class TriggerEmail:
-    uid: int
-    subject: str
-    sender: str
-    body: str
-    raw_headers: dict = field(default_factory=dict)
+def get_access_token():
+    resp = requests.post(TOKEN_URL, data={
+        "grant_type": "client_credentials",
+        "client_id": GRAPH_CLIENT_ID,
+        "client_secret": GRAPH_CLIENT_SECRET,
+        "scope": "https://graph.microsoft.com/.default",
+    })
+    resp.raise_for_status()
+    return resp.json()["access_token"]
 
 
-def _decode_header_value(raw: str) -> str:
-    parts = decode_header(raw)
-    return "".join(
-        fragment.decode(charset or "utf-8") if isinstance(fragment, bytes) else fragment
-        for fragment, charset in parts
+def fetch_new_applications(token):
+    """Poll inbox for unread CareerPlug notification emails."""
+    headers = {"Authorization": f"Bearer {token}"}
+    params = {
+        "$filter": "isRead eq false",
+        "$select": "id,subject,body,receivedDateTime",
+        "$orderby": "receivedDateTime desc",
+        "$top": 25,
+    }
+    resp = requests.get(
+        f"{GRAPH_BASE}/users/{GRAPH_USER_EMAIL}/mailFolders/inbox/messages",
+        headers=headers,
+        params=params,
+    )
+    resp.raise_for_status()
+    messages = resp.json().get("value", [])
+    # Graph API doesn't support contains() in $filter for subject, so filter here
+    return [m for m in messages if EMAIL_TRIGGER_SUBJECT.lower() in m.get("subject", "").lower()]
+
+
+def mark_as_read(token, message_id):
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    requests.patch(
+        f"{GRAPH_BASE}/users/{GRAPH_USER_EMAIL}/messages/{message_id}",
+        headers=headers,
+        json={"isRead": True},
     )
 
 
-def _extract_body(msg: email.message.Message) -> str:
-    if msg.is_multipart():
-        for part in msg.walk():
-            if part.get_content_type() == "text/plain" and not part.get("Content-Disposition"):
-                payload = part.get_payload(decode=True)
-                return payload.decode(part.get_content_charset() or "utf-8", errors="replace")
-        return ""
-    payload = msg.get_payload(decode=True)
-    if payload:
-        return payload.decode(msg.get_content_charset() or "utf-8", errors="replace")
-    return ""
+def extract_application_link(email_body):
+    """Pull the CareerPlug application URL out of the email body."""
+    match = re.search(r"https://app\.careerplug\.com/[^\s\"'<]+", email_body)
+    return match.group(0) if match else None
 
 
-def poll_once(mark_seen: bool = True) -> Generator[TriggerEmail, None, None]:
-    """Connect, fetch unseen trigger emails, yield each one, then disconnect."""
-    with IMAPClient(config.EMAIL_HOST, port=config.EMAIL_PORT, ssl=True) as client:
-        client.login(config.EMAIL_USERNAME, config.EMAIL_PASSWORD)
-        client.select_folder(config.EMAIL_FOLDER)
+def poll_once(mark_seen: bool = True) -> list:
+    """
+    Single-shot check: fetch unread trigger emails, optionally mark them read,
+    and return a list of simple objects with .subject, .app_url, .email_id.
+    """
+    from dataclasses import dataclass
 
-        uids = client.search(["UNSEEN", "SUBJECT", config.EMAIL_TRIGGER_SUBJECT])
-        logger.info("Found %d unseen trigger email(s)", len(uids))
+    @dataclass
+    class TriggerEmail:
+        subject: str
+        app_url: str
+        email_id: str
 
-        if not uids:
-            return
+    results = []
+    try:
+        token = get_access_token()
+        emails = fetch_new_applications(token)
+        for email in emails:
+            body = email.get("body", {}).get("content", "")
+            app_url = extract_application_link(body)
+            if app_url:
+                results.append(
+                    TriggerEmail(
+                        subject=email.get("subject", ""),
+                        app_url=app_url,
+                        email_id=email["id"],
+                    )
+                )
+                if mark_seen:
+                    mark_as_read(token, email["id"])
+    except Exception as e:
+        print(f"poll_once error: {e}")
+    return results
 
-        messages = client.fetch(uids, ["RFC822", "ENVELOPE"])
 
-        for uid, data in messages.items():
-            raw = data[b"RFC822"]
-            msg = email.message_from_bytes(raw)
+def poll_for_applications(callback, interval=60):
+    """
+    Continuously poll for new application emails.
+    Calls callback(candidate_name, application_url, email_id) for each new one.
+    """
+    print("Email trigger running — polling every 60s...")
+    while True:
+        try:
+            token = get_access_token()
+            emails = fetch_new_applications(token)
+            for email in emails:
+                body = email.get("body", {}).get("content", "")
+                app_url = extract_application_link(body)
+                subject = email.get("subject", "")
+                email_id = email["id"]
 
-            subject = _decode_header_value(msg.get("Subject", ""))
-            sender = _decode_header_value(msg.get("From", ""))
-            body = _extract_body(msg)
+                if app_url:
+                    print(f"New application found: {subject}")
+                    callback(subject, app_url, email_id)
+                    mark_as_read(token, email_id)
+                else:
+                    print(f"No application link found in: {subject}")
 
-            if mark_seen:
-                client.add_flags(uid, [b"\\Seen"])
+        except Exception as e:
+            print(f"Email trigger error: {e}")
 
-            yield TriggerEmail(uid=uid, subject=subject, sender=sender, body=body)
+        time.sleep(interval)

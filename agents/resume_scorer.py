@@ -1,6 +1,24 @@
 """
-Scores a resume against a job description using Claude.
-Returns a score 1-10 plus a brief rationale.
+Scores a candidate against the Stretch Zone hiring rubric using Claude.
+
+Rubric
+──────
+Auto-disqualify:
+  • High school students
+  • Job hoppers — consistent 6–7 month stints across multiple employers
+  • Unrelated work history with under 2 years total tenure
+
+⭐⭐⭐⭐ (4)  2+ recent relevant jobs  OR  pursuing / completed exercise
+             science / kinesiology degree
+⭐⭐⭐  (3)  2+ recent relevant jobs, no degree
+⭐⭐   (2)  Unrelated but consistent tenure (1 + year / role);
+             healthcare-adjacent roles; single long-tenure employer
+⭐    (1)  No relevance, no notable tenure
+
+Borderline tiebreaker: resume substance — sparse text → do not pursue;
+school achievements, sports, GPA → pursue.
+
+Returns ScoreResult(score=1–4, reasoning=str, auto_disqualified=bool).
 """
 
 import json
@@ -13,42 +31,61 @@ import config
 
 logger = logging.getLogger(__name__)
 
+SCORING_MODEL = "claude-sonnet-4-20250514"
+
 _client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
-SCORING_MODEL = "claude-sonnet-4-6"
-
 SYSTEM_PROMPT = """\
-You are an expert hiring evaluator. Given a job title, job description, and a candidate's resume text, \
-score the candidate's fit on a scale of 1 to 10 where:
-  1-3 = poor fit
-  4-6 = moderate fit
-  7-9 = strong fit
-  10  = exceptional fit
+You are a hiring evaluator for Stretch Zone 1082, a guided-stretching studio in Meridian, ID.
+Your job is to score a job applicant using the rubric below and return ONLY a JSON object.
 
-Respond ONLY with a valid JSON object in this exact shape:
+─── RUBRIC ────────────────────────────────────────────────────────────────────
+
+AUTO-DISQUALIFY (set auto_disqualified=true, score=0) if ANY of:
+  • Currently a high school student
+  • Job hopper: 3+ employers with consistently short stints (6–7 months each)
+  • Completely unrelated work history AND total work experience under 2 years
+
+STAR SCORES (auto_disqualified=false):
+  4 — Two or more RECENT jobs in fitness / wellness / athletics / personal training /
+      physical therapy / sports coaching  OR  applicant is pursuing or has completed
+      an exercise science, kinesiology, or related degree
+  3 — Two or more recent relevant jobs (as above), but no degree in the field
+  2 — Unrelated field BUT consistent tenure (≥1 year per role); OR healthcare-adjacent
+      role (nursing, CNA, massage therapy, etc.); OR single employer with long tenure (≥2 yr)
+  1 — No relevant experience, no notable tenure
+
+BORDERLINE TIEBREAKER (between 1 and 2, or 2 and 3):
+  Sparse resume with little detail → round down
+  School achievements, sports participation, high GPA, or strong extracurriculars → round up
+
+─── OUTPUT FORMAT ─────────────────────────────────────────────────────────────
+
+Respond with ONLY this JSON — no prose, no markdown:
 {
-  "score": <integer 1-10>,
-  "rationale": "<2-4 sentence summary of strengths and gaps>"
+  "score": <integer 0–4>,
+  "auto_disqualified": <true|false>,
+  "reasoning": "<2–4 sentences citing specific resume evidence>"
 }
 """
 
 
 @dataclass
 class ScoreResult:
-    score: int
-    rationale: str
+    score: int                 # 1–4 stars; 0 = auto-disqualified
+    auto_disqualified: bool
+    reasoning: str
     model: str
 
 
-def score_resume(
-    resume_text: str,
-    job_title: str,
-    job_description: str = "",
-) -> ScoreResult:
+def score_candidate(application_text: str, candidate_name: str = "") -> ScoreResult:
+    """
+    Score *application_text* against the Stretch Zone rubric.
+    *candidate_name* is included for readable logging only.
+    """
     user_content = (
-        f"Job Title: {job_title}\n\n"
-        f"Job Description:\n{job_description or '(none provided)'}\n\n"
-        f"Resume:\n{resume_text or '(no resume text extracted)'}"
+        f"Candidate: {candidate_name or 'Unknown'}\n\n"
+        f"Application / Resume Text:\n{application_text or '(no text provided)'}"
     )
 
     response = _client.messages.create(
@@ -63,11 +100,24 @@ def score_resume(
     try:
         data = json.loads(raw)
         score = int(data["score"])
-        rationale = str(data["rationale"])
+        auto_disqualified = bool(data["auto_disqualified"])
+        reasoning = str(data["reasoning"])
     except (json.JSONDecodeError, KeyError, ValueError) as exc:
         logger.error("Failed to parse Claude response: %s\nRaw: %s", exc, raw)
         score = 0
-        rationale = f"Parsing error — raw response: {raw[:300]}"
+        auto_disqualified = True
+        reasoning = f"Parsing error — raw response: {raw[:300]}"
 
-    logger.info("Score for '%s': %d/10", job_title, score)
-    return ScoreResult(score=score, rationale=rationale, model=response.model)
+    stars = "⭐" * score if score else "AUTO-DQ"
+    logger.info(
+        "Score for '%s': %s | auto_dq=%s",
+        candidate_name or "unknown",
+        stars,
+        auto_disqualified,
+    )
+    return ScoreResult(
+        score=score,
+        auto_disqualified=auto_disqualified,
+        reasoning=reasoning,
+        model=response.model,
+    )

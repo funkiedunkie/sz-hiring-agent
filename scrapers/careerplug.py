@@ -1,11 +1,22 @@
 """
-Scrapes new applicant data from CareerPlug using Playwright.
-Logs in, navigates to the applicant list, and returns structured applicant dicts.
+Scrapes a specific CareerPlug application page using Playwright.
+
+Confirmed selectors (verified 2026-06-07 against live app):
+  .profile-show__applicant-name   → candidate name
+  .profile-show__job-name         → "Applied for: <title>"
+  .profile-show__email a          → email address
+  .profile-show__phone a          → phone number
+  .prescreen-results              → prescreen Q&A (on ?tab=applicant_evaluation)
+
+Login flow: /user/sign_in → fill email → click #user_continue_action
+            → fill password → click input[type=submit] → wait for **/manage**
+
+Usage:
+    applicant = scrape_application("https://app.careerplug.com/manage/apps/150511565")
 """
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
 
 from playwright.sync_api import sync_playwright, Page, Browser
 
@@ -20,40 +31,35 @@ CAREERPLUG_BASE = "https://app.careerplug.com"
 class Applicant:
     name: str
     email: str
+    phone: str
     job_title: str
-    applied_at: str
-    resume_text: str
+    application_text: str       # prescreen Q&A from applicant_evaluation tab
     profile_url: str
-    raw: dict = field(default_factory=dict)
+    raw_body: str = field(default_factory=str, repr=False)
 
 
 def _login(page: Page) -> None:
-    page.goto(f"{CAREERPLUG_BASE}/login")
-    page.fill('input[name="email"]', config.CAREERPLUG_EMAIL)
-    page.fill('input[name="password"]', config.CAREERPLUG_PASSWORD)
-    page.click('button[type="submit"]')
-    page.wait_for_url(f"**/{config.CAREERPLUG_COMPANY_SLUG}/**", timeout=15_000)
+    page.goto(f"{CAREERPLUG_BASE}/user/sign_in")
+    page.wait_for_selector('input[name="user[login]"]', timeout=15_000)
+    page.fill('input[name="user[login]"]', config.CAREERPLUG_EMAIL)
+    page.click('input[id="user_continue_action"]')
+    page.wait_for_selector('input[name="user[password]"]', timeout=15_000)
+    page.fill('input[name="user[password]"]', config.CAREERPLUG_PASSWORD)
+    page.click('input[type="submit"]')
+    page.wait_for_url("**/manage**", timeout=20_000)
     logger.info("Logged in to CareerPlug")
 
 
-def _scrape_resume_text(page: Page, profile_url: str) -> str:
-    """Navigate to applicant profile and extract any visible resume text."""
-    page.goto(profile_url)
-    page.wait_for_load_state("networkidle")
-
-    # CareerPlug renders resume content inside a scrollable container.
-    # Adjust the selector if the markup changes.
-    resume_section = page.query_selector(".resume-content, [data-testid='resume-text']")
-    if resume_section:
-        return resume_section.inner_text().strip()
-
-    # Fallback: grab all visible body text on the profile page.
-    return page.inner_text("body").strip()
+def _text(page: Page, selector: str) -> str:
+    el = page.query_selector(selector)
+    return el.inner_text().strip() if el else ""
 
 
-def fetch_new_applicants(headless: bool = True) -> list[Applicant]:
-    applicants: list[Applicant] = []
-
+def scrape_application(application_url: str, headless: bool = True) -> Applicant:
+    """
+    Log in to CareerPlug and scrape the application at *application_url*.
+    Returns an Applicant with name, email, phone, job_title, and prescreen Q&A.
+    """
     with sync_playwright() as pw:
         browser: Browser = pw.chromium.launch(headless=headless)
         context = browser.new_context()
@@ -62,54 +68,42 @@ def fetch_new_applicants(headless: bool = True) -> list[Applicant]:
         try:
             _login(page)
 
-            # Navigate to the company applicant inbox (new/unreviewed).
-            inbox_url = (
-                f"{CAREERPLUG_BASE}/{config.CAREERPLUG_COMPANY_SLUG}"
-                "/applicants?status=new"
-            )
-            page.goto(inbox_url)
+            # ── Overview tab: name, email, phone, job title ───────────────────
+            logger.info("Navigating to application: %s", application_url)
+            page.goto(application_url)
             page.wait_for_load_state("networkidle")
 
-            # Each applicant row — adjust selector to match live markup.
-            rows = page.query_selector_all("[data-testid='applicant-row'], .applicant-list-item")
-            logger.info("Found %d applicant row(s) on page", len(rows))
+            raw_body = page.inner_text("body").strip()
 
-            for row in rows:
-                name_el = row.query_selector(".applicant-name, [data-testid='applicant-name']")
-                email_el = row.query_selector(".applicant-email, [data-testid='applicant-email']")
-                job_el = row.query_selector(".job-title, [data-testid='job-title']")
-                date_el = row.query_selector(".applied-date, [data-testid='applied-date']")
-                link_el = row.query_selector("a[href*='applicants']")
+            name = _text(page, ".profile-show__applicant-name")
+            email = _text(page, ".profile-show__email a")
+            phone = _text(page, ".profile-show__phone a")
 
-                name = name_el.inner_text().strip() if name_el else "Unknown"
-                applicant_email = email_el.inner_text().strip() if email_el else ""
-                job_title = job_el.inner_text().strip() if job_el else ""
-                applied_at = date_el.inner_text().strip() if date_el else ""
-                profile_url = ""
+            job_raw = _text(page, ".profile-show__job-name")
+            # Strip the "Applied for: " prefix CareerPlug prepends
+            job_title = job_raw.removeprefix("Applied for:").strip()
 
-                if link_el:
-                    href = link_el.get_attribute("href") or ""
-                    profile_url = href if href.startswith("http") else f"{CAREERPLUG_BASE}{href}"
+            # ── Applicant evaluation tab: prescreen Q&A ───────────────────────
+            eval_url = application_url.split("?")[0] + "?tab=applicant_evaluation"
+            page.goto(eval_url)
+            page.wait_for_load_state("networkidle")
 
-                resume_text = ""
-                if profile_url:
-                    try:
-                        resume_text = _scrape_resume_text(page, profile_url)
-                    except Exception as exc:
-                        logger.warning("Could not scrape resume for %s: %s", name, exc)
+            application_text = _text(page, ".prescreen-results")
+            if not application_text:
+                # Fallback: use overview body text (will include garbled PDF chars)
+                logger.warning("No .prescreen-results found for %s — using body text fallback", name)
+                application_text = raw_body
 
-                applicants.append(
-                    Applicant(
-                        name=name,
-                        email=applicant_email,
-                        job_title=job_title,
-                        applied_at=applied_at,
-                        resume_text=resume_text,
-                        profile_url=profile_url,
-                    )
-                )
+            logger.info("Scraped: %s | %s | %s | %s", name, email, phone, job_title)
+            return Applicant(
+                name=name,
+                email=email,
+                phone=phone,
+                job_title=job_title,
+                application_text=application_text,
+                profile_url=application_url,
+                raw_body=raw_body,
+            )
 
         finally:
             browser.close()
-
-    return applicants

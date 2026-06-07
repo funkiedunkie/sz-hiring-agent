@@ -1,95 +1,93 @@
-"""
-Entry point for the hiring agent.
+"""Entry point for the Stretch Zone 1082 hiring agent."""
 
-Flow:
-  1. Email trigger  — detect a "New Application" notification in the inbox
-  2. CareerPlug scraper — pull new applicants from the ATS
-  3. Claude scorer  — score each resume against the job title
-  4. Supabase logger — persist every result
-  5. Twilio SMS     — alert when score >= SCORE_NOTIFY_THRESHOLD
-"""
-
+import argparse
 import logging
 import sys
 
 import config
-from agents.resume_scorer import score_resume
+from agents.resume_scorer import score_candidate
 from db.supabase_logger import log_applicant
-from notifications.sms_sender import send_candidate_alert
-from scrapers.careerplug import fetch_new_applicants
+from notifications.email_sender import send_outreach_email
+from notifications.sms_sender import send_interview_invite
+from scrapers.careerplug import scrape_application
 from triggers.email_trigger import poll_once
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
+    format="%(asctime)s  %(levelname)-8s  %(name)s - %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
 
 
-def run() -> None:
+def run(dry_run: bool = False) -> None:
+    if dry_run:
+        logger.info("*** DRY RUN -- no SMS, email, or Supabase writes ***")
     logger.info("Hiring agent starting")
 
-    # ── Step 1: check email inbox for trigger emails ──────────────────────────
-    trigger_emails = list(poll_once(mark_seen=True))
-
+    trigger_emails = poll_once(mark_seen=not dry_run)
     if not trigger_emails:
-        logger.info("No trigger emails found — nothing to do")
+        logger.info("No trigger emails found -- nothing to do")
         return
 
-    logger.info("%d trigger email(s) found, fetching applicants…", len(trigger_emails))
+    logger.info("%d trigger email(s) found", len(trigger_emails))
 
-    # ── Step 2: scrape CareerPlug for new applicants ─────────────────────────
-    applicants = fetch_new_applicants(headless=True)
+    for trigger in trigger_emails:
+        logger.info("Processing: %s -> %s", trigger.subject, trigger.app_url)
 
-    if not applicants:
-        logger.info("No new applicants found in CareerPlug")
-        return
+        try:
+            applicant = scrape_application(trigger.app_url, headless=True)
+        except Exception as exc:
+            logger.error("Scrape failed for %s: %s", trigger.app_url, exc)
+            continue
 
-    logger.info("Processing %d applicant(s)…", len(applicants))
+        logger.info("Scraped: %s | %s | %s", applicant.name, applicant.email, applicant.phone)
 
-    for applicant in applicants:
-        logger.info("Scoring: %s — %s", applicant.name, applicant.job_title)
-
-        # ── Step 3: score with Claude ─────────────────────────────────────────
-        result = score_resume(
-            resume_text=applicant.resume_text,
-            job_title=applicant.job_title,
+        result = score_candidate(
+            application_text=applicant.application_text,
+            candidate_name=applicant.name,
         )
 
-        # ── Step 4: log to Supabase ───────────────────────────────────────────
-        trigger_subject = trigger_emails[0].subject if trigger_emails else ""
+        stars = "*" * result.score if result.score else "AUTO-DQ"
+        logger.info("Score: %s | auto_dq: %s | %s", stars, result.auto_disqualified, result.reasoning[:120])
+
         sms_sid = ""
+        if not result.auto_disqualified and result.score >= config.SCORE_NOTIFY_THRESHOLD:
+            if dry_run:
+                logger.info("[DRY RUN] Would send SMS + email to %s (%s / %s)",
+                            applicant.name, applicant.phone, applicant.email)
+            else:
+                logger.info("%s scored %d stars -- sending outreach", applicant.name, result.score)
+                sms_sid = send_interview_invite(candidate_name=applicant.name, candidate_phone=applicant.phone)
+                send_outreach_email(candidate_name=applicant.name, candidate_email=applicant.email)
+        else:
+            reason = "auto-disqualified" if result.auto_disqualified else "score %d < threshold %d" % (result.score, config.SCORE_NOTIFY_THRESHOLD)
+            logger.info("Skipping outreach for %s (%s)", applicant.name, reason)
 
-        # ── Step 5: SMS if score meets threshold ──────────────────────────────
-        if result.score >= config.SCORE_NOTIFY_THRESHOLD:
-            logger.info(
-                "Score %d >= threshold %d — sending SMS", result.score, config.SCORE_NOTIFY_THRESHOLD
-            )
-            sms_sid = send_candidate_alert(
-                candidate_name=applicant.name,
-                job_title=applicant.job_title,
-                score=result.score,
-                rationale=result.rationale,
+        if dry_run:
+            logger.info("[DRY RUN] Would log to Supabase: %s | score=%s | auto_dq=%s",
+                        applicant.name, result.score, result.auto_disqualified)
+        else:
+            log_applicant(
+                name=applicant.name,
+                email=applicant.email,
+                phone=applicant.phone,
                 profile_url=applicant.profile_url,
+                application_text=applicant.application_text,
+                score=result.score,
+                auto_disqualified=result.auto_disqualified,
+                reasoning=result.reasoning,
+                score_model=result.model,
+                sms_sid=sms_sid,
+                trigger_subject=trigger.subject,
             )
-
-        log_applicant(
-            name=applicant.name,
-            email=applicant.email,
-            job_title=applicant.job_title,
-            applied_at=applicant.applied_at,
-            resume_text=applicant.resume_text,
-            profile_url=applicant.profile_url,
-            score=result.score,
-            rationale=result.rationale,
-            score_model=result.model,
-            sms_sid=sms_sid,
-            trigger_subject=trigger_subject,
-        )
 
     logger.info("Hiring agent finished")
 
 
 if __name__ == "__main__":
-    run()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Scrape and score but skip SMS, email, and Supabase writes")
+    args = parser.parse_args()
+    run(dry_run=args.dry_run)
