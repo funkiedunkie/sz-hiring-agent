@@ -66,7 +66,7 @@ def log_applicant(
 
     inserted = response.data[0] if response.data else {}
     logger.info(
-        "Logged applicant '%s' → id: %s | score: %s | auto_dq: %s",
+        "Logged applicant '%s' id=%s score=%s auto_dq=%s",
         name,
         inserted.get("id"),
         score,
