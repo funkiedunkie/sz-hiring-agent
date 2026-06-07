@@ -3,3 +3,4 @@ gatherUsageStats = false
 
 [server]
 headless = true
+address = "0.0.0.0"
