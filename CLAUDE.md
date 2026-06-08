@@ -12,6 +12,9 @@ Email trigger (Graph API)
         └─▶ Resume scorer (Claude)
               ├─▶ Supabase logger          (always)
               └─▶ Outreach (SMS + Email)   (score >= threshold, not auto-DQ)
+
+Calendly webhook (Supabase Edge Function)
+  └─▶ invitee.created → match email → set calendly_booked = true
 ```
 
 ### Module map
@@ -26,6 +29,7 @@ Email trigger (Graph API)
 | `notifications/sms_sender.py` | Twilio SMS interview invite → candidate |
 | `notifications/email_sender.py` | Graph API outreach email → candidate |
 | `main.py` | Orchestrates the full pipeline |
+| `supabase/functions/calendly-webhook/index.ts` | Edge Function: marks applicant as booked on Calendly `invitee.created` |
 
 ## Email trigger — Microsoft Graph API
 
@@ -61,6 +65,29 @@ Both channels fire only when `score >= SCORE_NOTIFY_THRESHOLD` **and** `auto_dis
   You can grab a time here: {calendly_link}.
   Thanks, Duncan Richardson
   ```
+
+## Calendly webhook — `supabase/functions/calendly-webhook/index.ts`
+
+Supabase Edge Function that auto-marks `calendly_booked = true` when an invitee books.
+
+**Deploy:**
+```bash
+supabase functions deploy calendly-webhook
+```
+
+**Set secrets in Supabase:**
+```bash
+supabase secrets set CALENDLY_WEBHOOK_SIGNING_KEY=<from Calendly developer settings>
+```
+(`SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected automatically.)
+
+**Register the webhook in Calendly:**
+- Calendly → Integrations → Webhooks → Create Webhook
+- URL: `https://<your-project-ref>.supabase.co/functions/v1/calendly-webhook`
+- Event: `invitee.created`
+- Copy the signing key into `CALENDLY_WEBHOOK_SIGNING_KEY`
+
+**Matching logic:** invitee email → `applicants.email`. If no row matches, returns 200 (no retry).
 
 ## Scoring rubric (claude-sonnet-4-20250514)
 
@@ -128,7 +155,19 @@ create table if not exists applicants (
 );
 ```
 
-## Running
+## Deployment — GitHub Actions (primary)
+
+The agent runs autonomously via `.github/workflows/hiring-agent.yml` on a cron schedule
+(**every 10 minutes**, 24/7) — no laptop required.
+
+- Secrets are stored in GitHub → Settings → Secrets and variables → Actions
+- Logs: github.com/funkiedunkie/sz-hiring-agent/actions
+- Manual trigger: Actions → Hiring Agent → Run workflow
+- The Playwright browser binary is cached between runs to keep cold starts fast
+
+To update secrets: `gh secret set SECRET_NAME --body "value" --repo funkiedunkie/sz-hiring-agent`
+
+## Running locally
 
 ```bash
 # One-shot run (processes any unread trigger emails right now)
