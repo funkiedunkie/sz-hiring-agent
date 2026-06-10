@@ -187,22 +187,22 @@ def render_conversation(applicant_id: str, phone: str, email: str, tab: str = ""
 
             if m["direction"] == "outbound":
                 st.markdown(
-                    f"<div style='text-align:right; color:#555; font-size:0.85em'>"
+                    f"<div style='text-align:right; color:#555 !important; font-size:0.85em'>"
                     f"{channel_badge} <b>{direction_label}</b>{subject_line} &nbsp;·&nbsp; {ts}"
                     f"</div>"
                     f"<div style='text-align:right; background:#DCF8C6; border-radius:8px;"
-                    f" padding:8px 12px; margin:2px 0 6px auto; max-width:80%; display:inline-block;'>"
+                    f" padding:8px 12px; margin:2px 0 6px auto; max-width:80%; display:inline-block; color:#111;'>"
                     f"{_strip_html(m.get('body') or '')}"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
             else:
                 st.markdown(
-                    f"<div style='color:#555; font-size:0.85em'>"
+                    f"<div style='color:#555 !important; font-size:0.85em'>"
                     f"{channel_badge} <b>{direction_label}</b>{subject_line} &nbsp;·&nbsp; {ts}"
                     f"</div>"
                     f"<div style='background:#F0F0F0; border-radius:8px;"
-                    f" padding:8px 12px; margin:2px 0 6px 0; max-width:80%;'>"
+                    f" padding:8px 12px; margin:2px 0 6px 0; max-width:80%; color:#111;'>"
                     f"{_strip_html(m.get('body') or '')}"
                     f"</div>",
                     unsafe_allow_html=True,
