@@ -60,6 +60,9 @@ def do_invite(row_id: str, name: str, phone: str, email: str):
         "invite_sent_at": now,
         "sms_sid": sms_sid or "",
     }).eq("id", row_id).execute()
+    # Log SMS immediately (Twilio returns a SID we can dedup on).
+    # Email is NOT logged here — Graph sendMail returns no message ID, so we'd
+    # create an undeduplicatable row. Email sync pulls it from sent items instead.
     first_name = name.split()[0] if name else "there"
     sms_body = (
         f"Hi {first_name}, this is Duncan with Stretch Zone. I'd love to set up a "
@@ -68,16 +71,6 @@ def do_invite(row_id: str, name: str, phone: str, email: str):
     if sms_sid:
         insert_message(applicant_id=row_id, channel="sms", direction="outbound",
                        body=sms_body, external_id=sms_sid, sent_at=now)
-    email_body = (
-        f"{first_name}, thank you for your interest in the Stretch Practitioner position. "
-        f"After reviewing your application, I'd like to schedule a 15-minute virtual interview. "
-        f"You can grab a time here: {config.CALENDLY_LINK}. "
-        f"Thanks, Duncan Richardson"
-    )
-    insert_message(applicant_id=row_id, channel="email", direction="outbound",
-                   body=email_body,
-                   subject="Next step — Stretch Practitioner interview (Stretch Zone 1082)",
-                   sent_at=now)
 
 def do_mark_booked(row_id: str):
     db.table("applicants").update({"calendly_booked": True}).eq("id", row_id).execute()
@@ -94,8 +87,8 @@ def do_1hr_invite(row_id: str, phone: str, email: str, sms_body: str, email_body
                  body=sms_body.strip(), external_id=sid, sent_at=now)
     if email and email_body.strip():
         send_email(email, "1-Hour Interview — Stretch Zone 1082", email_body.strip())
-        _ins(applicant_id=row_id, channel="email", direction="outbound",
-             body=email_body.strip(), subject="1-Hour Interview — Stretch Zone 1082", sent_at=now)
+        # Email NOT logged here — no Graph message ID available from sendMail.
+        # Email sync will pick it up from sent items.
     db.table("applicants").update({
         "one_hr_invited": True,
         "one_hr_invite_sent_at": now,
