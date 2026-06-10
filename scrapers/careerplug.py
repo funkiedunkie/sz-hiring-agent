@@ -192,6 +192,49 @@ def scrape_all_app_urls(headless: bool = True) -> list[str]:
             browser.close()
 
 
+DEACTIVATE_REASONS = [
+    "Candidate withdrew",
+    "Did not meet desired qualifications",
+    "Did not fit company culture",
+    "No show for interview",
+    "Unresponsive",
+    "Other",
+]
+
+
+def deactivate_applicant(profile_url: str, reason: str = "", headless: bool = True) -> None:
+    """Log in, navigate to profile_url, open the deactivate drawer, optionally select
+    a rejection reason, and click Confirm.  Raises on failure."""
+    with sync_playwright() as pw:
+        browser: Browser = pw.chromium.launch(headless=headless)
+        context = browser.new_context()
+        page = context.new_page()
+        try:
+            _login(page)
+            page.goto(profile_url.split("?")[0])
+            page.wait_for_load_state("domcontentloaded")
+            page.wait_for_timeout(2000)
+
+            # Open the deactivate drawer (Stimulus drawer#show trigger)
+            page.locator('[data-action*="drawer#show"]').filter(has_text="Deactivate").first.click()
+
+            # Wait for the visible Confirm button (only the open drawer's button is visible)
+            confirm = page.locator('[data-action="click->deactivate-drawer#rejectApp"]:visible')
+            confirm.wait_for(state="visible", timeout=8000)
+
+            if reason:
+                page.locator('select[name="app_comment[reject_reason]"]:visible').select_option(
+                    reason, timeout=5000
+                )
+
+            confirm.click()
+            page.wait_for_timeout(1500)
+
+            logger.info("Deactivated %s with reason: %s", profile_url, reason or "(none)")
+        finally:
+            browser.close()
+
+
 def scrape_application_by_name(applicant_name: str, headless: bool = True) -> Applicant:
     """Log in, find the application URL by applicant name, then scrape it."""
     with sync_playwright() as pw:

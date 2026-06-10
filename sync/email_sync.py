@@ -23,7 +23,7 @@ GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
 def _get_applicant_email_map() -> dict[str, str]:
     """Return {lower_email: applicant_id} for all applicants with an email."""
-    resp = db.table("applicants").select("id, email").execute()
+    resp = db.table("applicants").select("id, email").neq("archived", True).execute()
     return {
         row["email"].lower(): row["id"]
         for row in (resp.data or [])

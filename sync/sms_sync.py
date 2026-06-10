@@ -22,7 +22,7 @@ _twilio = Client(config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN)
 
 def _get_applicant_phone_map() -> dict[str, str]:
     """Return {normalized_phone: applicant_id} for all applicants with a phone."""
-    resp = db.table("applicants").select("id, phone").execute()
+    resp = db.table("applicants").select("id, phone").neq("archived", True).execute()
     result = {}
     for row in resp.data or []:
         if row.get("phone"):

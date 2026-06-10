@@ -34,19 +34,23 @@ from notifications.sms_sender import send_interview_invite, send_sms
 from notifications.email_sender import send_outreach_email, send_email
 from sync.sms_sync import sync_all as sync_sms
 from sync.email_sync import sync_all as sync_email
+from scrapers.careerplug import deactivate_applicant, DEACTIVATE_REASONS
 
 st.set_page_config(page_title="SZ 1082 Hiring", layout="wide", page_icon="💪")
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
-def load() -> pd.DataFrame:
-    resp = db.table("applicants").select("*").order("created_at", desc=True).execute()
+def load(show_archived: bool = False) -> pd.DataFrame:
+    q = db.table("applicants").select("*").order("created_at", desc=True)
+    if not show_archived:
+        q = q.neq("archived", True)
+    resp = q.execute()
     if not resp.data:
         return pd.DataFrame()
     df = pd.DataFrame(resp.data)
     df["created_at"] = pd.to_datetime(df["created_at"], utc=True).dt.tz_convert("US/Mountain")
     for col in ["score", "auto_disqualified", "manually_invited", "calendly_booked", "sms_sid", "invite_sent_at",
-                "one_hr_invited", "one_hr_invite_sent_at"]:
+                "one_hr_invited", "one_hr_invite_sent_at", "archived"]:
         if col not in df.columns:
             df[col] = None
     return df
@@ -81,6 +85,17 @@ def do_invite(row_id: str, name: str, phone: str, email: str):
                            body=email_body, subject=email_subj,
                            external_id=email_id, sent_at=now)
 
+def do_deactivate(row_id: str, profile_url: str, reason: str) -> bool:
+    """Deactivate in CareerPlug then archive in Supabase. Returns True on success."""
+    try:
+        deactivate_applicant(profile_url, reason)
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return False
+    db.table("applicants").update({"archived": True}).eq("id", row_id).execute()
+    return True
+
 def do_mark_booked(row_id: str):
     db.table("applicants").update({"calendly_booked": True}).eq("id", row_id).execute()
 
@@ -114,7 +129,7 @@ def do_1hr_invite(row_id: str, phone: str, email: str, sms_body: str, email_body
 
 st.title("Stretch Zone 1082 — Hiring")
 
-col_refresh, col_sync, _ = st.columns([1, 2, 6])
+col_refresh, col_sync, col_archived, _ = st.columns([1, 2, 2, 3])
 with col_refresh:
     if st.button("🔄 Refresh"):
         st.rerun()
@@ -128,8 +143,25 @@ with col_sync:
             f"Email: +{email_counts['inbound']} in / +{email_counts['outbound']} out"
         )
         st.rerun()
+with col_archived:
+    show_archived = st.toggle("Show archived", value=False)
 
-df = load()
+df = load(show_archived=show_archived)
+
+# ── Bulk archive ──────────────────────────────────────────────────────────────
+
+if not df.empty and not show_archived:
+    with st.expander("🗑️ Bulk Archive"):
+        options = {
+            f"{r['name']}  ({'AUTO-DQ' if r.get('auto_disqualified') else '⭐' * int(r.get('score') or 0)})": r["id"]
+            for _, r in df.iterrows()
+        }
+        selected_labels = st.multiselect("Select applicants to archive", list(options.keys()), label_visibility="collapsed")
+        if st.button(f"Archive {len(selected_labels)} selected", disabled=not selected_labels, type="primary"):
+            ids_to_archive = [options[lbl] for lbl in selected_labels]
+            db.table("applicants").update({"archived": True}).in_("id", ids_to_archive).execute()
+            st.success(f"Archived {len(ids_to_archive)} applicant(s).")
+            st.rerun()
 
 if df.empty:
     st.info("No applicants yet — the agent will populate this when applications arrive.")
@@ -401,6 +433,42 @@ def render(subset: pd.DataFrame, tab: str = ""):
                     sent_1hr = fmt_dt(r.get("one_hr_invite_sent_at"))
                     if sent_1hr:
                         st.caption(sent_1hr)
+
+                st.write("")
+                if not r.get("archived"):
+                    if st.button("🗑️ Archive", key=f"arch_{tab}_{r['id']}", help="Hide from dashboard; won't re-appear on sync"):
+                        db.table("applicants").update({"archived": True}).eq("id", r["id"]).execute()
+                        st.rerun()
+                else:
+                    if st.button("↩️ Unarchive", key=f"unarch_{tab}_{r['id']}"):
+                        db.table("applicants").update({"archived": False}).eq("id", r["id"]).execute()
+                        st.rerun()
+
+                st.write("")
+                if not r.get("archived") and _s(r.get("profile_url")):
+                    if st.button("❌ Deactivate in CareerPlug", key=f"dq_btn_{tab}_{r['id']}"):
+                        st.session_state[f"show_dq_{r['id']}"] = True
+                    if st.session_state.get(f"show_dq_{r['id']}"):
+                        dq_reason = st.selectbox(
+                            "Rejection reason",
+                            DEACTIVATE_REASONS,
+                            key=f"dq_reason_{tab}_{r['id']}",
+                        )
+                        c_dq1, c_dq2 = st.columns(2)
+                        with c_dq1:
+                            if st.button("Confirm & Archive", key=f"dq_confirm_{tab}_{r['id']}", type="primary"):
+                                with st.spinner("Deactivating in CareerPlug..."):
+                                    ok = do_deactivate(r["id"], _s(r.get("profile_url")), dq_reason)
+                                st.session_state.pop(f"show_dq_{r['id']}", None)
+                                if ok:
+                                    st.success("Deactivated in CareerPlug and archived.")
+                                else:
+                                    st.error("CareerPlug deactivation failed — check logs. Not archived.")
+                                st.rerun()
+                        with c_dq2:
+                            if st.button("Cancel", key=f"dq_cancel_{tab}_{r['id']}"):
+                                st.session_state.pop(f"show_dq_{r['id']}", None)
+                                st.rerun()
 
             st.divider()
             render_conversation(
