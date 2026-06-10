@@ -7,6 +7,7 @@ Deduplication is handled by external_id (Graph message ID).
 """
 
 import logging
+import re
 
 import requests
 
@@ -95,16 +96,23 @@ def _sync_folder(
             # toRecipients/any() is not supported as OData $filter — use KQL $search
             messages = _fetch_messages_search(token, folder, f'"to:{email}"')
             # Filter in Python: exact recipient match + sent by our own address
-            # (KQL search can return conversation thread objects that aren't direct sends)
-            messages = [
-                m for m in messages
-                if any(
+            # + exclude calendar/Calendly notification objects (body starts with "Event Name")
+            def _is_real_email(m: dict) -> bool:
+                if not any(
                     r.get("emailAddress", {}).get("address", "").lower() == email
                     for r in m.get("toRecipients", [])
-                )
-                and m.get("from", {}).get("emailAddress", {}).get("address", "").lower()
-                    == config.GRAPH_USER_EMAIL.lower()
-            ]
+                ):
+                    return False
+                if m.get("from", {}).get("emailAddress", {}).get("address", "").lower() \
+                        != config.GRAPH_USER_EMAIL.lower():
+                    return False
+                raw_body = (m.get("body") or {}).get("content", "")
+                stripped = re.sub(r"<[^>]+>", " ", raw_body).strip()
+                if stripped.startswith("Event Name"):
+                    return False
+                return True
+
+            messages = [m for m in messages if _is_real_email(m)]
 
         for msg in messages:
             ts = msg.get("sentDateTime") or msg.get("receivedDateTime")

@@ -44,48 +44,57 @@ def _get_access_token() -> str:
     return resp.json()["access_token"]
 
 
-def send_email(to_email: str, subject: str, body: str) -> bool:
+def send_email(to_email: str, subject: str, body: str) -> str:
     """
-    Send a custom email to *to_email* via Graph API.
-    Returns True on success, False on failure.
+    Send a custom email to *to_email* via Graph API (draft → send).
+    Returns the Graph message ID on success, or "" on failure.
+    Using draft→send instead of sendMail so we capture the message ID
+    for deduplication in the messages table.
     """
     if not to_email:
         logger.warning("send_email called with empty address")
-        return False
-
-    payload = {
-        "message": {
-            "subject": subject,
-            "body": {"contentType": "Text", "content": body},
-            "toRecipients": [{"emailAddress": {"address": to_email}}],
-        },
-        "saveToSentItems": "true",
-    }
+        return ""
 
     try:
         token = _get_access_token()
-        resp = requests.post(
-            f"{GRAPH_BASE}/users/{config.GRAPH_USER_EMAIL}/sendMail",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+        # Step 1: create draft
+        draft_resp = requests.post(
+            f"{GRAPH_BASE}/users/{config.GRAPH_USER_EMAIL}/messages",
+            headers=headers,
+            json={
+                "subject": subject,
+                "body": {"contentType": "Text", "content": body},
+                "toRecipients": [{"emailAddress": {"address": to_email}}],
             },
-            json=payload,
         )
-        resp.raise_for_status()
-        logger.info("Email sent to %s — %s", to_email, subject)
-        return True
+        draft_resp.raise_for_status()
+        message_id = draft_resp.json()["id"]
+
+        # Step 2: send the draft
+        send_resp = requests.post(
+            f"{GRAPH_BASE}/users/{config.GRAPH_USER_EMAIL}/messages/{message_id}/send",
+            headers=headers,
+        )
+        send_resp.raise_for_status()
+
+        logger.info("Email sent to %s — %s (id: %s)", to_email, subject, message_id)
+        return message_id
     except requests.HTTPError as exc:
         logger.error(
-            "Graph sendMail failed to %s: %s — %s",
+            "Graph send_email failed to %s: %s — %s",
             to_email,
             exc,
             exc.response.text if exc.response is not None else "",
         )
-        return False
+        return ""
     except Exception as exc:
         logger.error("send_email failed to %s: %s", to_email, exc)
-        return False
+        return ""
 
 
 def send_outreach_email(candidate_name: str, candidate_email: str) -> bool:

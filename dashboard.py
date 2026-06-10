@@ -54,15 +54,11 @@ def load() -> pd.DataFrame:
 def do_invite(row_id: str, name: str, phone: str, email: str):
     now = datetime.now(timezone.utc).isoformat()
     sms_sid = send_interview_invite(candidate_name=name, candidate_phone=phone)
-    send_outreach_email(candidate_name=name, candidate_email=email)
     db.table("applicants").update({
         "manually_invited": True,
         "invite_sent_at": now,
         "sms_sid": sms_sid or "",
     }).eq("id", row_id).execute()
-    # Log SMS immediately (Twilio returns a SID we can dedup on).
-    # Email is NOT logged here — Graph sendMail returns no message ID, so we'd
-    # create an undeduplicatable row. Email sync pulls it from sent items instead.
     first_name = name.split()[0] if name else "there"
     sms_body = (
         f"Hi {first_name}, this is Duncan with Stretch Zone. I'd love to set up a "
@@ -71,6 +67,19 @@ def do_invite(row_id: str, name: str, phone: str, email: str):
     if sms_sid:
         insert_message(applicant_id=row_id, channel="sms", direction="outbound",
                        body=sms_body, external_id=sms_sid, sent_at=now)
+    email_body = (
+        f"{first_name}, thank you for your interest in the Stretch Practitioner position. "
+        f"After reviewing your application, I'd like to schedule a 15-minute virtual interview. "
+        f"You can grab a time here: {config.CALENDLY_LINK}. "
+        f"Thanks, Duncan Richardson"
+    )
+    email_subj = "Next step — Stretch Practitioner interview (Stretch Zone 1082)"
+    if email:
+        email_id = send_email(email, email_subj, email_body)
+        if email_id:
+            insert_message(applicant_id=row_id, channel="email", direction="outbound",
+                           body=email_body, subject=email_subj,
+                           external_id=email_id, sent_at=now)
 
 def do_mark_booked(row_id: str):
     db.table("applicants").update({"calendly_booked": True}).eq("id", row_id).execute()
@@ -86,9 +95,11 @@ def do_1hr_invite(row_id: str, phone: str, email: str, sms_body: str, email_body
             _ins(applicant_id=row_id, channel="sms", direction="outbound",
                  body=sms_body.strip(), external_id=sid, sent_at=now)
     if email and email_body.strip():
-        send_email(email, "1-Hour Interview — Stretch Zone 1082", email_body.strip())
-        # Email NOT logged here — no Graph message ID available from sendMail.
-        # Email sync will pick it up from sent items.
+        email_id = send_email(email, "1-Hour Interview — Stretch Zone 1082", email_body.strip())
+        if email_id:
+            _ins(applicant_id=row_id, channel="email", direction="outbound",
+                 body=email_body.strip(), subject="1-Hour Interview — Stretch Zone 1082",
+                 external_id=email_id, sent_at=now)
     db.table("applicants").update({
         "one_hr_invited": True,
         "one_hr_invite_sent_at": now,
@@ -250,14 +261,16 @@ def render_conversation(applicant_id: str, phone: str, email: str, tab: str = ""
                 st.error("No email address on file for this applicant.")
             else:
                 with st.spinner("Sending..."):
-                    ok = send_email(email, email_subject.strip() or "Re: Stretch Practitioner", email_body.strip())
-                if ok:
+                    subj = email_subject.strip() or "Re: Stretch Practitioner"
+                    email_id = send_email(email, subj, email_body.strip())
+                if email_id:
                     insert_message(
                         applicant_id=applicant_id,
                         channel="email",
                         direction="outbound",
                         body=email_body.strip(),
-                        subject=email_subject.strip() or "Re: Stretch Practitioner",
+                        subject=subj,
+                        external_id=email_id,
                         sent_at=datetime.now(timezone.utc).isoformat(),
                     )
                     st.success("Email sent!")
