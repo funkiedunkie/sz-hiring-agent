@@ -29,6 +29,7 @@ Calendly webhook (Supabase Edge Function)
 | `notifications/sms_sender.py` | Twilio SMS interview invite → candidate |
 | `notifications/email_sender.py` | Graph API outreach email → candidate |
 | `main.py` | Orchestrates the full pipeline |
+| `backfill.py` | One-shot backfill: scrapes all CareerPlug apps, skips ones already in Supabase, runs full pipeline for new ones |
 | `supabase/functions/calendly-webhook/index.ts` | Edge Function: marks applicant as booked on Calendly `invitee.created` |
 
 ## Email trigger — Microsoft Graph API
@@ -129,6 +130,7 @@ GRAPH_USER_EMAIL               # the Outlook mailbox to poll and send from
 
 # Calendly
 CALENDLY_LINK                  # full URL, e.g. https://calendly.com/duncan/15min
+CALENDLY_WEBHOOK_SIGNING_KEY   # from Calendly Developer → Webhooks → Signing Key (used by Edge Function)
 
 # Optional
 EMAIL_TRIGGER_SUBJECT          # default: "New Application"
