@@ -94,13 +94,16 @@ def _sync_folder(
         else:
             # toRecipients/any() is not supported as OData $filter — use KQL $search
             messages = _fetch_messages_search(token, folder, f'"to:{email}"')
-            # Filter in Python to avoid false positives from KQL fuzzy matching
+            # Filter in Python: exact recipient match + sent by our own address
+            # (KQL search can return conversation thread objects that aren't direct sends)
             messages = [
                 m for m in messages
                 if any(
                     r.get("emailAddress", {}).get("address", "").lower() == email
                     for r in m.get("toRecipients", [])
                 )
+                and m.get("from", {}).get("emailAddress", {}).get("address", "").lower()
+                    == config.GRAPH_USER_EMAIL.lower()
             ]
 
         for msg in messages:
