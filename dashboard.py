@@ -124,8 +124,9 @@ def fmt_dt(ts) -> str:
         return str(ts)
 
 
-def render_conversation(applicant_id: str, phone: str, email: str):
+def render_conversation(applicant_id: str, phone: str, email: str, tab: str = ""):
     """Render the threaded message history and reply controls for one applicant."""
+    k = f"{tab}_{applicant_id}"  # unique key prefix per tab+applicant
     messages = get_messages_for_applicant(applicant_id)
 
     if messages:
@@ -167,10 +168,10 @@ def render_conversation(applicant_id: str, phone: str, email: str):
 
     with reply_tab_sms:
         sms_body = st.text_area(
-            "Message", key=f"sms_body_{applicant_id}", label_visibility="collapsed",
+            "Message", key=f"sms_body_{k}", label_visibility="collapsed",
             placeholder="Type an SMS...", height=80,
         )
-        if st.button("Send SMS", key=f"send_sms_{applicant_id}", type="primary"):
+        if st.button("Send SMS", key=f"send_sms_{k}", type="primary"):
             if not sms_body.strip():
                 st.warning("Message is empty.")
             elif not phone:
@@ -194,14 +195,14 @@ def render_conversation(applicant_id: str, phone: str, email: str):
 
     with reply_tab_email:
         email_subject = st.text_input(
-            "Subject", key=f"email_subj_{applicant_id}",
+            "Subject", key=f"email_subj_{k}",
             placeholder="Re: Stretch Practitioner interview",
         )
         email_body = st.text_area(
-            "Message", key=f"email_body_{applicant_id}", label_visibility="collapsed",
+            "Message", key=f"email_body_{k}", label_visibility="collapsed",
             placeholder="Type an email...", height=80,
         )
-        if st.button("Send Email", key=f"send_email_{applicant_id}", type="primary"):
+        if st.button("Send Email", key=f"send_email_{k}", type="primary"):
             if not email_body.strip():
                 st.warning("Message is empty.")
             elif not email:
@@ -336,6 +337,7 @@ def render(subset: pd.DataFrame, tab: str = ""):
                 applicant_id=str(r["id"]),
                 phone=_s(r.get("phone")),
                 email=_s(r.get("email")),
+                tab=tab,
             )
 
 
