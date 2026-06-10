@@ -35,7 +35,7 @@ dashboard.py (Streamlit)
 |------|------|
 | `config.py` | Loads all env vars; raises on missing |
 | `triggers/email_trigger.py` | Polls Outlook inbox via Microsoft Graph API |
-| `scrapers/careerplug.py` | Playwright login → scrape specific application URL |
+| `scrapers/careerplug.py` | Playwright login → scrape application URL; `deactivate_applicant(profile_url, reason)` deactivates a candidate in CareerPlug |
 | `agents/resume_scorer.py` | Claude `claude-sonnet-4-20250514` scorer |
 | `db/supabase_logger.py` | Insert applicant rows into Supabase |
 | `db/messages_logger.py` | Insert / fetch rows from the `messages` table |
@@ -96,6 +96,10 @@ Streamlit app. Run with `streamlit run dashboard.py`.
 - Outbound messages sent from the dashboard are logged to the `messages` table immediately
 - Inbound SMS arrives in real-time via the `twilio-webhook` Edge Function; email replies arrive on next sync
 - **Advance to 1-Hr Interview** button: reveals editable SMS + email forms pre-filled with the 1-hr Calendly link (`CALENDLY_LINK_1HR`); "Send Both" fires both channels, logs to `messages`, and sets `one_hr_invited = true` on the applicant
+- **Archive / Unarchive** button per card: soft-deletes the applicant (`archived = true`); archived applicants are hidden by default and skipped by sync
+- **Show archived** toggle in the header: reveals archived applicants; shows Unarchive button instead of Archive
+- **🗑️ Bulk Archive** expander: multiselect any visible applicants and archive them in one click
+- **❌ Deactivate in CareerPlug** button per card: choose a rejection reason, click Confirm — Playwright logs into CareerPlug, opens the deactivate drawer, selects the reason, and confirms; on success the applicant is also archived in Supabase
 
 ## Twilio inbound webhook — `supabase/functions/twilio-webhook/index.ts`
 
@@ -121,8 +125,8 @@ supabase secrets set TWILIO_AUTH_TOKEN=<your token>
 
 Run standalone or triggered from the dashboard's **Sync Messages** button.
 
-- `sync/sms_sync.py`: fetches up to 500 inbound + 500 outbound Twilio messages, matches by phone, dedupes by Twilio SID (`external_id`)
-- `sync/email_sync.py`: fetches inbox (inbound) and sentitems (outbound) from Graph API, filters by applicant email addresses, dedupes by Graph message ID (`external_id`)
+- `sync/sms_sync.py`: fetches up to 500 inbound + 500 outbound Twilio messages, matches by phone, dedupes by Twilio SID (`external_id`); skips archived applicants
+- `sync/email_sync.py`: fetches inbox (inbound) and sentitems (outbound) from Graph API, filters by applicant email addresses, dedupes by Graph message ID (`external_id`); skips archived applicants
 
 ## Calendly webhook — `supabase/functions/calendly-webhook/index.ts`
 
@@ -215,7 +219,8 @@ create table if not exists applicants (
     sms_sid              text,
     trigger_subject      text,
     one_hr_invited       boolean default false,
-    one_hr_invite_sent_at timestamptz
+    one_hr_invite_sent_at timestamptz,
+    archived             boolean default false
 );
 ```
 
