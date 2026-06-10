@@ -30,12 +30,12 @@ def _get_applicant_email_map() -> dict[str, str]:
     }
 
 
-def _fetch_messages(token: str, folder: str, filter_clause: str) -> list[dict]:
-    """Page through a mail folder with a filter, returning all message objects."""
+def _fetch_messages_filter(token: str, folder: str, filter_clause: str) -> list[dict]:
+    """Fetch messages using OData $filter (supported for inbox/from queries)."""
     url = (
         f"{GRAPH_BASE}/users/{config.GRAPH_USER_EMAIL}"
         f"/mailFolders/{folder}/messages"
-        f"?$filter={filter_clause}"
+        f"?$filter={requests.utils.quote(filter_clause)}"
         f"&$select=id,subject,body,from,toRecipients,sentDateTime,receivedDateTime"
         f"&$top=50"
     )
@@ -54,25 +54,54 @@ def _fetch_messages(token: str, folder: str, filter_clause: str) -> list[dict]:
     return results
 
 
+def _fetch_messages_search(token: str, folder: str, search_query: str) -> list[dict]:
+    """Fetch messages using KQL $search (used for sentitems/toRecipients queries)."""
+    url = (
+        f"{GRAPH_BASE}/users/{config.GRAPH_USER_EMAIL}"
+        f"/mailFolders/{folder}/messages"
+        f"?$search={requests.utils.quote(search_query)}"
+        f"&$select=id,subject,body,from,toRecipients,sentDateTime,receivedDateTime"
+        f"&$top=50"
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    results = []
+
+    while url:
+        resp = requests.get(url, headers=headers)
+        if resp.status_code != 200:
+            logger.error("Graph messages search failed: %s — %s", resp.status_code, resp.text)
+            break
+        data = resp.json()
+        results.extend(data.get("value", []))
+        url = data.get("@odata.nextLink")
+
+    return results
+
+
 def _sync_folder(
     token: str,
     email_map: dict[str, str],
     folder: str,
     direction: str,
-    address_field: str,
 ) -> int:
-    """
-    Sync one mail folder for all known applicant addresses.
-    address_field: 'from' for inbox (inbound), 'toRecipients' for sentitems (outbound).
-    """
+    """Sync one mail folder for all known applicant addresses."""
     count = 0
     for email, applicant_id in email_map.items():
         if direction == "inbound":
-            filter_clause = f"from/emailAddress/address eq '{email}'"
+            messages = _fetch_messages_filter(
+                token, folder, f"from/emailAddress/address eq '{email}'"
+            )
         else:
-            filter_clause = f"toRecipients/any(r: r/emailAddress/address eq '{email}')"
-
-        messages = _fetch_messages(token, folder, filter_clause)
+            # toRecipients/any() is not supported as OData $filter — use KQL $search
+            messages = _fetch_messages_search(token, folder, f'"to:{email}"')
+            # Filter in Python to avoid false positives from KQL fuzzy matching
+            messages = [
+                m for m in messages
+                if any(
+                    r.get("emailAddress", {}).get("address", "").lower() == email
+                    for r in m.get("toRecipients", [])
+                )
+            ]
 
         for msg in messages:
             ts = msg.get("sentDateTime") or msg.get("receivedDateTime")
@@ -107,8 +136,8 @@ def sync_all() -> dict[str, int]:
         logger.error("Could not get Graph token for email sync: %s", exc)
         return {"inbound": 0, "outbound": 0}
 
-    inbound = _sync_folder(token, email_map, "inbox", "inbound", "from")
-    outbound = _sync_folder(token, email_map, "sentitems", "outbound", "toRecipients")
+    inbound = _sync_folder(token, email_map, "inbox", "inbound")
+    outbound = _sync_folder(token, email_map, "sentitems", "outbound")
     logger.info("Email sync complete — inbound: %d, outbound: %d", inbound, outbound)
     return {"inbound": inbound, "outbound": outbound}
 

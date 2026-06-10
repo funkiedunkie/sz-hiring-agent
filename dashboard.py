@@ -3,8 +3,20 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timezone
 
+import re
 import config
 from db.supabase_logger import _client as db
+
+def _strip_html(text: str) -> str:
+    """Remove HTML tags and collapse whitespace for display."""
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"&nbsp;", " ", text)
+    text = re.sub(r"&amp;", "&", text)
+    text = re.sub(r"&lt;", "<", text)
+    text = re.sub(r"&gt;", ">", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 def _s(val) -> str:
     """Pandas-safe string: returns '' for None, NaN, or 'nan'."""
@@ -180,7 +192,7 @@ def render_conversation(applicant_id: str, phone: str, email: str, tab: str = ""
                     f"</div>"
                     f"<div style='text-align:right; background:#DCF8C6; border-radius:8px;"
                     f" padding:8px 12px; margin:2px 0 6px auto; max-width:80%; display:inline-block;'>"
-                    f"{m.get('body') or ''}"
+                    f"{_strip_html(m.get('body') or '')}"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -191,7 +203,7 @@ def render_conversation(applicant_id: str, phone: str, email: str, tab: str = ""
                     f"</div>"
                     f"<div style='background:#F0F0F0; border-radius:8px;"
                     f" padding:8px 12px; margin:2px 0 6px 0; max-width:80%;'>"
-                    f"{m.get('body') or ''}"
+                    f"{_strip_html(m.get('body') or '')}"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
