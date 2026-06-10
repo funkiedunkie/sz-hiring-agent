@@ -40,13 +40,32 @@ def load() -> pd.DataFrame:
     return df
 
 def do_invite(row_id: str, name: str, phone: str, email: str):
+    now = datetime.now(timezone.utc).isoformat()
     sms_sid = send_interview_invite(candidate_name=name, candidate_phone=phone)
     send_outreach_email(candidate_name=name, candidate_email=email)
     db.table("applicants").update({
         "manually_invited": True,
-        "invite_sent_at": datetime.now(timezone.utc).isoformat(),
+        "invite_sent_at": now,
         "sms_sid": sms_sid or "",
     }).eq("id", row_id).execute()
+    first_name = name.split()[0] if name else "there"
+    sms_body = (
+        f"Hi {first_name}, this is Duncan with Stretch Zone. I'd love to set up a "
+        f"quick 15-minute virtual interview — here's a link to grab a time: {config.CALENDLY_LINK}"
+    )
+    if sms_sid:
+        insert_message(applicant_id=row_id, channel="sms", direction="outbound",
+                       body=sms_body, external_id=sms_sid, sent_at=now)
+    email_body = (
+        f"{first_name}, thank you for your interest in the Stretch Practitioner position. "
+        f"After reviewing your application, I'd like to schedule a 15-minute virtual interview. "
+        f"You can grab a time here: {config.CALENDLY_LINK}. "
+        f"Thanks, Duncan Richardson"
+    )
+    insert_message(applicant_id=row_id, channel="email", direction="outbound",
+                   body=email_body,
+                   subject="Next step — Stretch Practitioner interview (Stretch Zone 1082)",
+                   sent_at=now)
 
 def do_mark_booked(row_id: str):
     db.table("applicants").update({"calendly_booked": True}).eq("id", row_id).execute()
@@ -124,14 +143,31 @@ def fmt_dt(ts) -> str:
         return str(ts)
 
 
-def render_conversation(applicant_id: str, phone: str, email: str, tab: str = ""):
+def render_conversation(applicant_id: str, phone: str, email: str, tab: str = "",
+                        sms_sid: str = "", invite_sent_at: str = ""):
     """Render the threaded message history and reply controls for one applicant."""
     k = f"{tab}_{applicant_id}"  # unique key prefix per tab+applicant
     messages = get_messages_for_applicant(applicant_id)
 
-    if messages:
+    # Synthetic entry for pre-messages-table invites (sms_sid set but no DB row)
+    has_invite_msg = any(
+        m["direction"] == "outbound" and m["channel"] == "sms" for m in messages
+    )
+    synthetic = []
+    if sms_sid and not has_invite_msg:
+        synthetic = [{
+            "channel": "sms", "direction": "outbound",
+            "body": f"[Initial 15-min invite sent by agent]",
+            "subject": None,
+            "sent_at": invite_sent_at or None,
+            "created_at": invite_sent_at or None,
+        }]
+
+    all_messages = synthetic + messages
+
+    if all_messages:
         st.markdown("**Messages**")
-        for m in messages:
+        for m in all_messages:
             ts = fmt_dt(m.get("sent_at") or m.get("created_at"))
             channel_badge = "📱" if m["channel"] == "sms" else "✉️"
             direction_label = "You" if m["direction"] == "outbound" else "Candidate"
@@ -160,7 +196,7 @@ def render_conversation(applicant_id: str, phone: str, email: str, tab: str = ""
                     unsafe_allow_html=True,
                 )
     else:
-        st.caption("No messages yet.")
+        st.caption("No messages yet — use 📥 Sync Messages to load history.")
 
     st.markdown("**Reply**")
 
@@ -307,11 +343,11 @@ def render(subset: pd.DataFrame, tab: str = ""):
                         )
                         sms_msg = st.text_area(
                             "SMS message", value=default_sms,
-                            key=f"1hr_sms_{r['id']}", height=100,
+                            key=f"1hr_sms_{tab}_{r['id']}", height=100,
                         )
                         email_msg = st.text_area(
                             "Email message", value=default_email,
-                            key=f"1hr_email_{r['id']}", height=130,
+                            key=f"1hr_email_{tab}_{r['id']}", height=130,
                         )
                         c1, c2 = st.columns(2)
                         with c1:
@@ -338,6 +374,8 @@ def render(subset: pd.DataFrame, tab: str = ""):
                 phone=_s(r.get("phone")),
                 email=_s(r.get("email")),
                 tab=tab,
+                sms_sid=_s(r.get("sms_sid")),
+                invite_sent_at=_s(r.get("invite_sent_at")),
             )
 
 
