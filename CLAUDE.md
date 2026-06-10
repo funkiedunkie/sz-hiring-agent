@@ -93,6 +93,7 @@ Streamlit app. Run with `streamlit run dashboard.py`.
 - **Reply** section has two tabs — SMS and Email — each with a compose area and Send button
 - Outbound messages sent from the dashboard are logged to the `messages` table immediately
 - Inbound SMS arrives in real-time via the `twilio-webhook` Edge Function; email replies arrive on next sync
+- **Advance to 1-Hr Interview** button: reveals editable SMS + email forms pre-filled with the 1-hr Calendly link (`CALENDLY_LINK_1HR`); "Send Both" fires both channels, logs to `messages`, and sets `one_hr_invited = true` on the applicant
 
 ## Twilio inbound webhook — `supabase/functions/twilio-webhook/index.ts`
 
@@ -183,7 +184,8 @@ GRAPH_CLIENT_SECRET
 GRAPH_USER_EMAIL               # the Outlook mailbox to poll and send from
 
 # Calendly
-CALENDLY_LINK                  # full URL, e.g. https://calendly.com/duncan/15min
+CALENDLY_LINK                  # 15-min virtual interview link
+CALENDLY_LINK_1HR              # 1-hour in-person interview link (default: https://calendly.com/duncan-bodiesinmotionidaho/interview)
 CALENDLY_WEBHOOK_SIGNING_KEY   # from Calendly Developer → Webhooks → Signing Key (used by Edge Function)
 
 # Optional
@@ -205,11 +207,13 @@ create table if not exists applicants (
     profile_url       text,
     application_text  text,
     score             int,           -- 1–4 stars; 0 = auto-disqualified
-    auto_disqualified boolean default false,
-    reasoning         text,
-    score_model       text,
-    sms_sid           text,
-    trigger_subject   text
+    auto_disqualified    boolean default false,
+    reasoning            text,
+    score_model          text,
+    sms_sid              text,
+    trigger_subject      text,
+    one_hr_invited       boolean default false,
+    one_hr_invite_sent_at timestamptz
 );
 ```
 

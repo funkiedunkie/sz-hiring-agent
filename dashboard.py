@@ -21,7 +21,8 @@ def load() -> pd.DataFrame:
         return pd.DataFrame()
     df = pd.DataFrame(resp.data)
     df["created_at"] = pd.to_datetime(df["created_at"], utc=True).dt.tz_convert("US/Mountain")
-    for col in ["score", "auto_disqualified", "manually_invited", "calendly_booked", "sms_sid", "invite_sent_at"]:
+    for col in ["score", "auto_disqualified", "manually_invited", "calendly_booked", "sms_sid", "invite_sent_at",
+                "one_hr_invited", "one_hr_invite_sent_at"]:
         if col not in df.columns:
             df[col] = None
     return df
@@ -37,6 +38,25 @@ def do_invite(row_id: str, name: str, phone: str, email: str):
 
 def do_mark_booked(row_id: str):
     db.table("applicants").update({"calendly_booked": True}).eq("id", row_id).execute()
+
+def do_1hr_invite(row_id: str, phone: str, email: str, sms_body: str, email_body: str):
+    from notifications.sms_sender import send_sms
+    from notifications.email_sender import send_email
+    from db.messages_logger import insert_message as _ins
+    now = datetime.now(timezone.utc).isoformat()
+    if phone and sms_body.strip():
+        sid = send_sms(phone, sms_body.strip())
+        if sid:
+            _ins(applicant_id=row_id, channel="sms", direction="outbound",
+                 body=sms_body.strip(), external_id=sid, sent_at=now)
+    if email and email_body.strip():
+        send_email(email, "1-Hour Interview — Stretch Zone 1082", email_body.strip())
+        _ins(applicant_id=row_id, channel="email", direction="outbound",
+             body=email_body.strip(), subject="1-Hour Interview — Stretch Zone 1082", sent_at=now)
+    db.table("applicants").update({
+        "one_hr_invited": True,
+        "one_hr_invite_sent_at": now,
+    }).eq("id", row_id).execute()
 
 # ── Header ────────────────────────────────────────────────────────────────────
 
@@ -200,14 +220,16 @@ def render(subset: pd.DataFrame, tab: str = ""):
         return
 
     for _, r in subset.iterrows():
-        score      = int(r.get("score") or 0)
-        is_dq      = bool(r.get("auto_disqualified"))
-        is_invited = bool(r.get("sms_sid") or "") or bool(r.get("manually_invited"))
-        is_booked  = bool(r.get("calendly_booked"))
+        score         = int(r.get("score") or 0)
+        is_dq         = bool(r.get("auto_disqualified"))
+        is_invited    = bool(r.get("sms_sid") or "") or bool(r.get("manually_invited"))
+        is_booked     = bool(r.get("calendly_booked"))
+        is_1hr        = bool(r.get("one_hr_invited"))
 
         star_str = ("AUTO-DQ" if is_dq else "⭐" * score)
         label    = f"{star_str}  {r['name']}  —  {r.get('job_title', '')}"
         if is_invited: label += "  ✉️"
+        if is_1hr:     label += "  🎯"
         if is_booked:  label += "  📅"
 
         with st.expander(label):
@@ -252,6 +274,50 @@ def render(subset: pd.DataFrame, tab: str = ""):
                         st.rerun()
                 else:
                     st.info("📅 Booked")
+
+                st.write("")
+
+                if not is_1hr:
+                    if st.button("🎯 Advance to 1-Hr Interview", key=f"1hr_btn_{tab}_{r['id']}"):
+                        st.session_state[f"show_1hr_{r['id']}"] = True
+                    if st.session_state.get(f"show_1hr_{r['id']}"):
+                        first_name = str(r["name"]).split()[0]
+                        default_sms = (
+                            f"Hi {first_name}, I'd love to have you in for a 1-hour interview! "
+                            f"Here's a link to grab a time: {config.CALENDLY_LINK_1HR}"
+                        )
+                        default_email = (
+                            f"{first_name}, thank you for the initial conversation — "
+                            f"I'd like to move forward with a 1-hour in-person interview.\n\n"
+                            f"You can book a time here: {config.CALENDLY_LINK_1HR}\n\n"
+                            f"Thanks,\nDuncan Richardson"
+                        )
+                        sms_msg = st.text_area(
+                            "SMS message", value=default_sms,
+                            key=f"1hr_sms_{r['id']}", height=100,
+                        )
+                        email_msg = st.text_area(
+                            "Email message", value=default_email,
+                            key=f"1hr_email_{r['id']}", height=130,
+                        )
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            if st.button("Send Both", key=f"1hr_send_{tab}_{r['id']}", type="primary"):
+                                with st.spinner("Sending..."):
+                                    do_1hr_invite(r["id"], r.get("phone") or "",
+                                                  r.get("email") or "", sms_msg, email_msg)
+                                st.session_state.pop(f"show_1hr_{r['id']}", None)
+                                st.success("1-hr invite sent!")
+                                st.rerun()
+                        with c2:
+                            if st.button("Cancel", key=f"1hr_cancel_{tab}_{r['id']}"):
+                                st.session_state.pop(f"show_1hr_{r['id']}", None)
+                                st.rerun()
+                else:
+                    st.success("🎯 1-Hr Invited")
+                    sent_1hr = fmt_dt(r.get("one_hr_invite_sent_at"))
+                    if sent_1hr:
+                        st.caption(sent_1hr)
 
             st.divider()
             render_conversation(
