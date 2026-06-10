@@ -39,8 +39,8 @@ dashboard.py (Streamlit)
 | `agents/resume_scorer.py` | Claude `claude-sonnet-4-20250514` scorer |
 | `db/supabase_logger.py` | Insert applicant rows into Supabase |
 | `db/messages_logger.py` | Insert / fetch rows from the `messages` table |
-| `notifications/sms_sender.py` | Twilio SMS: `send_interview_invite()` (templated) + `send_sms()` (custom) |
-| `notifications/email_sender.py` | Graph API email: `send_outreach_email()` (templated) + `send_email()` (custom) |
+| `notifications/sms_sender.py` | Twilio SMS: `send_interview_invite()` (templated) + `send_sms(phone, body)` (custom) → returns SID |
+| `notifications/email_sender.py` | Graph API email: `send_outreach_email()` (auto-pipeline, returns bool) + `send_email(to, subject, body)` (dashboard, draft→send, returns Graph message ID for dedup) |
 | `sync/sms_sync.py` | Backfill Twilio inbound+outbound SMS into `messages` for all known applicants |
 | `sync/email_sync.py` | Backfill Graph inbox+sentitems emails into `messages` for all known applicants |
 | `main.py` | Orchestrates the full pipeline |
@@ -72,9 +72,11 @@ Both channels fire only when `score >= SCORE_NOTIFY_THRESHOLD` **and** `auto_dis
 - Template: `"Hi {first_name}, this is Duncan with Stretch Zone. I'd love to set up a quick 15-minute virtual interview — here's a link to grab a time: {calendly_link}"`
 
 ### Email — `notifications/email_sender.py`
-- Provider: **Microsoft Graph API** (`POST /users/{GRAPH_USER_EMAIL}/sendMail`)
+- Provider: **Microsoft Graph API**
 - Uses the same Graph token approach as `triggers/email_trigger.py`
 - **Not SMTP. Not Gmail. No `smtplib`.**
+- `send_outreach_email()` — used by the auto-pipeline (`main.py`); uses `POST /sendMail`, returns bool
+- `send_email(to, subject, body)` — used by the dashboard; uses draft→send (`POST /messages` then `POST /messages/{id}/send`) so the Graph message ID is available immediately for dedup logging in the `messages` table
 - Subject: `Next step — Stretch Practitioner interview (Stretch Zone 1082)`
 - Body template:
   ```
