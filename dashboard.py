@@ -84,26 +84,31 @@ def do_invite(row_id: str, name: str, phone: str, email: str):
 def do_mark_booked(row_id: str):
     db.table("applicants").update({"calendly_booked": True}).eq("id", row_id).execute()
 
-def do_1hr_invite(row_id: str, phone: str, email: str, sms_body: str, email_body: str):
+def do_1hr_invite(row_id: str, phone: str, email: str, sms_body: str, email_body: str) -> int:
     from notifications.sms_sender import send_sms
     from notifications.email_sender import send_email
     from db.messages_logger import insert_message as _ins
     now = datetime.now(timezone.utc).isoformat()
+    sent = 0
     if phone and sms_body.strip():
         sid = send_sms(phone, sms_body.strip())
         if sid:
             _ins(applicant_id=row_id, channel="sms", direction="outbound",
                  body=sms_body.strip(), external_id=sid, sent_at=now)
+            sent += 1
     if email and email_body.strip():
         email_id = send_email(email, "1-Hour Interview — Stretch Zone 1082", email_body.strip())
         if email_id:
             _ins(applicant_id=row_id, channel="email", direction="outbound",
                  body=email_body.strip(), subject="1-Hour Interview — Stretch Zone 1082",
                  external_id=email_id, sent_at=now)
-    db.table("applicants").update({
-        "one_hr_invited": True,
-        "one_hr_invite_sent_at": now,
-    }).eq("id", row_id).execute()
+            sent += 1
+    if sent:
+        db.table("applicants").update({
+            "one_hr_invited": True,
+            "one_hr_invite_sent_at": now,
+        }).eq("id", row_id).execute()
+    return sent
 
 # ── Header ────────────────────────────────────────────────────────────────────
 
@@ -320,8 +325,12 @@ def render(subset: pd.DataFrame, tab: str = ""):
 
             with right:
                 if not is_invited:
+                    _missing_inv = [c for c, v in [("phone", _s(r.get("phone"))), ("email", _s(r.get("email")))] if not v]
+                    if _missing_inv:
+                        st.warning(f"Missing contact info: {', '.join(_missing_inv)}")
                     if st.button("Send Invite", key=f"inv_{tab}_{r['id']}", type="primary",
-                                 help="Sends SMS + email with Calendly link"):
+                                 help="Sends SMS + email with Calendly link",
+                                 disabled=bool(_missing_inv)):
                         with st.spinner("Sending..."):
                             do_invite(r["id"], r["name"],
                                       _s(r.get("phone")), _s(r.get("email")))
@@ -345,7 +354,11 @@ def render(subset: pd.DataFrame, tab: str = ""):
                 st.write("")
 
                 if not is_1hr:
-                    if st.button("🎯 Advance to 1-Hr Interview", key=f"1hr_btn_{tab}_{r['id']}"):
+                    _missing_1hr = [c for c, v in [("phone", _s(r.get("phone"))), ("email", _s(r.get("email")))] if not v]
+                    if _missing_1hr:
+                        st.warning(f"Missing contact info: {', '.join(_missing_1hr)}")
+                    if st.button("🎯 Advance to 1-Hr Interview", key=f"1hr_btn_{tab}_{r['id']}",
+                                 disabled=bool(_missing_1hr)):
                         st.session_state[f"show_1hr_{r['id']}"] = True
                     if st.session_state.get(f"show_1hr_{r['id']}"):
                         first_name = str(r["name"]).split()[0]
@@ -371,10 +384,13 @@ def render(subset: pd.DataFrame, tab: str = ""):
                         with c1:
                             if st.button("Send Both", key=f"1hr_send_{tab}_{r['id']}", type="primary"):
                                 with st.spinner("Sending..."):
-                                    do_1hr_invite(r["id"], _s(r.get("phone")),
-                                                  _s(r.get("email")), sms_msg, email_msg)
+                                    sent_count = do_1hr_invite(r["id"], _s(r.get("phone")),
+                                                               _s(r.get("email")), sms_msg, email_msg)
                                 st.session_state.pop(f"show_1hr_{r['id']}", None)
-                                st.success("1-hr invite sent!")
+                                if sent_count:
+                                    st.success(f"1-hr invite sent ({sent_count} channel{'s' if sent_count > 1 else ''})!")
+                                else:
+                                    st.error("Nothing sent — no valid contact info.")
                                 st.rerun()
                         with c2:
                             if st.button("Cancel", key=f"1hr_cancel_{tab}_{r['id']}"):
