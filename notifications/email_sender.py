@@ -44,6 +44,50 @@ def _get_access_token() -> str:
     return resp.json()["access_token"]
 
 
+def send_email(to_email: str, subject: str, body: str) -> bool:
+    """
+    Send a custom email to *to_email* via Graph API.
+    Returns True on success, False on failure.
+    """
+    if not to_email:
+        logger.warning("send_email called with empty address")
+        return False
+
+    payload = {
+        "message": {
+            "subject": subject,
+            "body": {"contentType": "Text", "content": body},
+            "toRecipients": [{"emailAddress": {"address": to_email}}],
+        },
+        "saveToSentItems": "true",
+    }
+
+    try:
+        token = _get_access_token()
+        resp = requests.post(
+            f"{GRAPH_BASE}/users/{config.GRAPH_USER_EMAIL}/sendMail",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+        resp.raise_for_status()
+        logger.info("Email sent to %s — %s", to_email, subject)
+        return True
+    except requests.HTTPError as exc:
+        logger.error(
+            "Graph sendMail failed to %s: %s — %s",
+            to_email,
+            exc,
+            exc.response.text if exc.response is not None else "",
+        )
+        return False
+    except Exception as exc:
+        logger.error("send_email failed to %s: %s", to_email, exc)
+        return False
+
+
 def send_outreach_email(candidate_name: str, candidate_email: str) -> bool:
     """
     Send the interview-invite email to *candidate_email*.

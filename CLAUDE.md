@@ -15,6 +15,18 @@ Email trigger (Graph API)
 
 Calendly webhook (Supabase Edge Function)
   └─▶ invitee.created → match email → set calendly_booked = true
+
+Twilio inbound webhook (Supabase Edge Function)
+  └─▶ candidate SMS reply → match phone → insert messages row
+
+sync/sms_sync.py  (cron / dashboard button)
+  └─▶ Twilio API → backfill all inbound+outbound SMS for known applicants
+
+sync/email_sync.py  (cron / dashboard button)
+  └─▶ Graph API inbox + sentitems → backfill all emails for known applicants
+
+dashboard.py (Streamlit)
+  └─▶ per-applicant conversation thread (SMS + email interleaved) + reply controls
 ```
 
 ### Module map
@@ -26,11 +38,16 @@ Calendly webhook (Supabase Edge Function)
 | `scrapers/careerplug.py` | Playwright login → scrape specific application URL |
 | `agents/resume_scorer.py` | Claude `claude-sonnet-4-20250514` scorer |
 | `db/supabase_logger.py` | Insert applicant rows into Supabase |
-| `notifications/sms_sender.py` | Twilio SMS interview invite → candidate |
-| `notifications/email_sender.py` | Graph API outreach email → candidate |
+| `db/messages_logger.py` | Insert / fetch rows from the `messages` table |
+| `notifications/sms_sender.py` | Twilio SMS: `send_interview_invite()` (templated) + `send_sms()` (custom) |
+| `notifications/email_sender.py` | Graph API email: `send_outreach_email()` (templated) + `send_email()` (custom) |
+| `sync/sms_sync.py` | Backfill Twilio inbound+outbound SMS into `messages` for all known applicants |
+| `sync/email_sync.py` | Backfill Graph inbox+sentitems emails into `messages` for all known applicants |
 | `main.py` | Orchestrates the full pipeline |
 | `backfill.py` | One-shot backfill: scrapes all CareerPlug apps, skips ones already in Supabase, runs full pipeline for new ones |
+| `dashboard.py` | Streamlit dashboard: applicant cards + per-applicant SMS/email conversation thread + reply UI |
 | `supabase/functions/calendly-webhook/index.ts` | Edge Function: marks applicant as booked on Calendly `invitee.created` |
+| `supabase/functions/twilio-webhook/index.ts` | Edge Function: receives Twilio inbound SMS, matches phone → applicant, inserts `messages` row |
 
 ## Email trigger — Microsoft Graph API
 
@@ -66,6 +83,43 @@ Both channels fire only when `score >= SCORE_NOTIFY_THRESHOLD` **and** `auto_dis
   You can grab a time here: {calendly_link}.
   Thanks, Duncan Richardson
   ```
+
+## Dashboard — `dashboard.py`
+
+Streamlit app. Run with `streamlit run dashboard.py`.
+
+- **📥 Sync Messages** button triggers `sync/sms_sync.py` + `sync/email_sync.py` on demand
+- Each applicant card expands to show a threaded conversation (SMS 📱 and email ✉️ interleaved, oldest first)
+- **Reply** section has two tabs — SMS and Email — each with a compose area and Send button
+- Outbound messages sent from the dashboard are logged to the `messages` table immediately
+- Inbound SMS arrives in real-time via the `twilio-webhook` Edge Function; email replies arrive on next sync
+
+## Twilio inbound webhook — `supabase/functions/twilio-webhook/index.ts`
+
+Supabase Edge Function. Twilio POSTs here when a candidate replies to an SMS.
+
+**Deploy:**
+```bash
+supabase functions deploy twilio-webhook
+```
+
+**Set secrets in Supabase:**
+```bash
+supabase secrets set TWILIO_AUTH_TOKEN=<your token>
+```
+
+**Register in Twilio:**
+- Twilio Console → Phone Numbers → your number → Messaging → "A message comes in"
+- Set to Webhook, HTTP POST: `https://<your-project-ref>.supabase.co/functions/v1/twilio-webhook`
+
+**Matching logic:** `From` phone (normalized to E.164) → `applicants.phone`. Unmatched numbers return 200 (no retry).
+
+## Message sync — `sync/sms_sync.py` and `sync/email_sync.py`
+
+Run standalone or triggered from the dashboard's **Sync Messages** button.
+
+- `sync/sms_sync.py`: fetches up to 500 inbound + 500 outbound Twilio messages, matches by phone, dedupes by Twilio SID (`external_id`)
+- `sync/email_sync.py`: fetches inbox (inbound) and sentitems (outbound) from Graph API, filters by applicant email addresses, dedupes by Graph message ID (`external_id`)
 
 ## Calendly webhook — `supabase/functions/calendly-webhook/index.ts`
 
@@ -137,7 +191,9 @@ EMAIL_TRIGGER_SUBJECT          # default: "New Application"
 SCORE_NOTIFY_THRESHOLD         # default: 2  (1–4 star scale)
 ```
 
-## Supabase — `applicants` table schema
+## Supabase — table schemas
+
+### `applicants`
 
 ```sql
 create table if not exists applicants (
@@ -154,6 +210,22 @@ create table if not exists applicants (
     score_model       text,
     sms_sid           text,
     trigger_subject   text
+);
+```
+
+### `messages`
+
+```sql
+create table if not exists messages (
+    id           uuid primary key default gen_random_uuid(),
+    created_at   timestamptz default now(),
+    applicant_id uuid not null references applicants(id) on delete cascade,
+    channel      text not null check (channel in ('sms', 'email')),
+    direction    text not null check (direction in ('inbound', 'outbound')),
+    body         text,
+    subject      text,           -- email only
+    external_id  text unique,    -- Twilio SID or Graph message ID (dedup key)
+    sent_at      timestamptz
 );
 ```
 

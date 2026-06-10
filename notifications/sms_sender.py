@@ -33,6 +33,29 @@ def _normalize_phone(phone: str) -> str:
     return phone  # pass through and let Twilio validate
 
 
+def send_sms(phone: str, body: str) -> str:
+    """
+    Send a custom SMS to *phone*.
+    Returns the Twilio message SID, or an empty string on failure.
+    """
+    if not phone:
+        logger.warning("send_sms called with empty phone")
+        return ""
+
+    normalized = _normalize_phone(phone)
+    try:
+        message = _client.messages.create(
+            body=body,
+            from_=config.TWILIO_FROM_NUMBER,
+            to=normalized,
+        )
+        logger.info("SMS sent to %s, SID: %s", normalized, message.sid)
+        return message.sid
+    except Exception as exc:
+        logger.error("SMS failed to %s: %s", phone, exc)
+        return ""
+
+
 def send_interview_invite(candidate_name: str, candidate_phone: str) -> str:
     """
     Send the standard interview invite SMS to *candidate_phone*.

@@ -5,8 +5,11 @@ from datetime import datetime, timezone
 
 import config
 from db.supabase_logger import _client as db
-from notifications.sms_sender import send_interview_invite
-from notifications.email_sender import send_outreach_email
+from db.messages_logger import get_messages_for_applicant, insert_message
+from notifications.sms_sender import send_interview_invite, send_sms
+from notifications.email_sender import send_outreach_email, send_email
+from sync.sms_sync import sync_all as sync_sms
+from sync.email_sync import sync_all as sync_email
 
 st.set_page_config(page_title="SZ 1082 Hiring", layout="wide", page_icon="💪")
 
@@ -39,9 +42,19 @@ def do_mark_booked(row_id: str):
 
 st.title("Stretch Zone 1082 — Hiring")
 
-col_refresh, _ = st.columns([1, 8])
+col_refresh, col_sync, _ = st.columns([1, 2, 6])
 with col_refresh:
     if st.button("🔄 Refresh"):
+        st.rerun()
+with col_sync:
+    if st.button("📥 Sync Messages"):
+        with st.spinner("Syncing SMS and email..."):
+            sms_counts = sync_sms()
+            email_counts = sync_email()
+        st.success(
+            f"Synced — SMS: +{sms_counts['inbound']} in / +{sms_counts['outbound']} out  |  "
+            f"Email: +{email_counts['inbound']} in / +{email_counts['outbound']} out"
+        )
         st.rerun()
 
 df = load()
@@ -67,7 +80,7 @@ m5.metric("Calendly Booked", booked)
 
 st.divider()
 
-# ── Card renderer ─────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def fmt_dt(ts) -> str:
     if ts is None or (isinstance(ts, float) and pd.isna(ts)):
@@ -77,6 +90,109 @@ def fmt_dt(ts) -> str:
         return dt.strftime("%b %d, %Y %I:%M %p MT")
     except Exception:
         return str(ts)
+
+
+def render_conversation(applicant_id: str, phone: str, email: str):
+    """Render the threaded message history and reply controls for one applicant."""
+    messages = get_messages_for_applicant(applicant_id)
+
+    if messages:
+        st.markdown("**Messages**")
+        for m in messages:
+            ts = fmt_dt(m.get("sent_at") or m.get("created_at"))
+            channel_badge = "📱" if m["channel"] == "sms" else "✉️"
+            direction_label = "You" if m["direction"] == "outbound" else "Candidate"
+            subject_line = f" — *{m['subject']}*" if m.get("subject") else ""
+
+            if m["direction"] == "outbound":
+                st.markdown(
+                    f"<div style='text-align:right; color:#555; font-size:0.85em'>"
+                    f"{channel_badge} <b>{direction_label}</b>{subject_line} &nbsp;·&nbsp; {ts}"
+                    f"</div>"
+                    f"<div style='text-align:right; background:#DCF8C6; border-radius:8px;"
+                    f" padding:8px 12px; margin:2px 0 6px auto; max-width:80%; display:inline-block;'>"
+                    f"{m.get('body') or ''}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f"<div style='color:#555; font-size:0.85em'>"
+                    f"{channel_badge} <b>{direction_label}</b>{subject_line} &nbsp;·&nbsp; {ts}"
+                    f"</div>"
+                    f"<div style='background:#F0F0F0; border-radius:8px;"
+                    f" padding:8px 12px; margin:2px 0 6px 0; max-width:80%;'>"
+                    f"{m.get('body') or ''}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+    else:
+        st.caption("No messages yet.")
+
+    st.markdown("**Reply**")
+
+    reply_tab_sms, reply_tab_email = st.tabs(["📱 SMS", "✉️ Email"])
+
+    with reply_tab_sms:
+        sms_body = st.text_area(
+            "Message", key=f"sms_body_{applicant_id}", label_visibility="collapsed",
+            placeholder="Type an SMS...", height=80,
+        )
+        if st.button("Send SMS", key=f"send_sms_{applicant_id}", type="primary"):
+            if not sms_body.strip():
+                st.warning("Message is empty.")
+            elif not phone:
+                st.error("No phone number on file for this applicant.")
+            else:
+                with st.spinner("Sending..."):
+                    sid = send_sms(phone, sms_body.strip())
+                if sid:
+                    insert_message(
+                        applicant_id=applicant_id,
+                        channel="sms",
+                        direction="outbound",
+                        body=sms_body.strip(),
+                        external_id=sid,
+                        sent_at=datetime.now(timezone.utc).isoformat(),
+                    )
+                    st.success("SMS sent!")
+                    st.rerun()
+                else:
+                    st.error("SMS failed — check logs.")
+
+    with reply_tab_email:
+        email_subject = st.text_input(
+            "Subject", key=f"email_subj_{applicant_id}",
+            placeholder="Re: Stretch Practitioner interview",
+        )
+        email_body = st.text_area(
+            "Message", key=f"email_body_{applicant_id}", label_visibility="collapsed",
+            placeholder="Type an email...", height=80,
+        )
+        if st.button("Send Email", key=f"send_email_{applicant_id}", type="primary"):
+            if not email_body.strip():
+                st.warning("Message is empty.")
+            elif not email:
+                st.error("No email address on file for this applicant.")
+            else:
+                with st.spinner("Sending..."):
+                    ok = send_email(email, email_subject.strip() or "Re: Stretch Practitioner", email_body.strip())
+                if ok:
+                    insert_message(
+                        applicant_id=applicant_id,
+                        channel="email",
+                        direction="outbound",
+                        body=email_body.strip(),
+                        subject=email_subject.strip() or "Re: Stretch Practitioner",
+                        sent_at=datetime.now(timezone.utc).isoformat(),
+                    )
+                    st.success("Email sent!")
+                    st.rerun()
+                else:
+                    st.error("Email failed — check logs.")
+
+
+# ── Card renderer ─────────────────────────────────────────────────────────────
 
 def render(subset: pd.DataFrame, tab: str = ""):
     if subset.empty:
@@ -136,6 +252,14 @@ def render(subset: pd.DataFrame, tab: str = ""):
                         st.rerun()
                 else:
                     st.info("📅 Booked")
+
+            st.divider()
+            render_conversation(
+                applicant_id=str(r["id"]),
+                phone=str(r.get("phone") or ""),
+                email=str(r.get("email") or ""),
+            )
+
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
