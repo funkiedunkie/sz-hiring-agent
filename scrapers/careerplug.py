@@ -157,6 +157,41 @@ def scrape_application(application_url: str, headless: bool = True) -> Applicant
             browser.close()
 
 
+def scrape_all_app_urls(headless: bool = True) -> list[str]:
+    """Log in and return every application URL from the full apps list (all statuses)."""
+    with sync_playwright() as pw:
+        browser: Browser = pw.chromium.launch(headless=headless)
+        context = browser.new_context()
+        page = context.new_page()
+        try:
+            _login(page)
+            urls: list[str] = []
+            seen: set[str] = set()
+            list_url: str | None = APPS_LIST_ALL_URL
+            while list_url:
+                page.goto(list_url)
+                page.wait_for_load_state("domcontentloaded")
+                page.wait_for_timeout(2500)
+                for link in page.query_selector_all('a[href*="/manage/apps/"]'):
+                    href = link.get_attribute("href") or ""
+                    if re.match(r".*/manage/apps/\d+$", href):
+                        full = href if href.startswith("http") else CAREERPLUG_BASE + href
+                        if full not in seen:
+                            seen.add(full)
+                            urls.append(full)
+                # Follow "Next" pagination if present
+                next_el = page.query_selector('a[rel="next"], a:text("Next")')
+                if next_el:
+                    next_href = next_el.get_attribute("href") or ""
+                    list_url = next_href if next_href.startswith("http") else (CAREERPLUG_BASE + next_href if next_href else None)
+                else:
+                    list_url = None
+            logger.info("Found %d total application URLs", len(urls))
+            return urls
+        finally:
+            browser.close()
+
+
 def scrape_application_by_name(applicant_name: str, headless: bool = True) -> Applicant:
     """Log in, find the application URL by applicant name, then scrape it."""
     with sync_playwright() as pw:

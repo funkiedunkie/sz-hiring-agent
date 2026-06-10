@@ -96,6 +96,12 @@ def score_candidate(application_text: str, candidate_name: str = "") -> ScoreRes
     )
 
     raw = response.content[0].text.strip()
+    # Strip optional ```json ... ``` fences Claude sometimes adds
+    if raw.startswith("```"):
+        raw = raw.split("```", 2)[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.strip()
 
     try:
         data = json.loads(raw)
