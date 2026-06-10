@@ -23,8 +23,10 @@ MESSAGE_TEMPLATE = (
 )
 
 
-def _normalize_phone(phone: str) -> str:
+def _normalize_phone(phone) -> str:
     """Normalize a US phone number to E.164 format (+1XXXXXXXXXX)."""
+    if not isinstance(phone, str):
+        return ""
     digits = re.sub(r"\D", "", phone)
     if len(digits) == 10:
         return f"+1{digits}"

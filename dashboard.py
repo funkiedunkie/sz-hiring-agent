@@ -5,6 +5,18 @@ from datetime import datetime, timezone
 
 import config
 from db.supabase_logger import _client as db
+
+def _s(val) -> str:
+    """Pandas-safe string: returns '' for None, NaN, or 'nan'."""
+    if val is None:
+        return ""
+    try:
+        if pd.isna(val):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    s = str(val).strip()
+    return "" if s == "nan" else s
 from db.messages_logger import get_messages_for_applicant, insert_message
 from notifications.sms_sender import send_interview_invite, send_sms
 from notifications.email_sender import send_outreach_email, send_email
@@ -237,8 +249,8 @@ def render(subset: pd.DataFrame, tab: str = ""):
 
             with left:
                 st.markdown(
-                    f"**Email:** {r.get('email') or '—'}  \n"
-                    f"**Phone:** {r.get('phone') or '—'}"
+                    f"**Email:** {_s(r.get('email')) or '—'}  \n"
+                    f"**Phone:** {_s(r.get('phone')) or '—'}"
                 )
                 applied = fmt_dt(r.get("created_at"))
                 if applied:
@@ -257,7 +269,7 @@ def render(subset: pd.DataFrame, tab: str = ""):
                                  help="Sends SMS + email with Calendly link"):
                         with st.spinner("Sending..."):
                             do_invite(r["id"], r["name"],
-                                      r.get("phone") or "", r.get("email") or "")
+                                      _s(r.get("phone")), _s(r.get("email")))
                         st.success("Invite sent!")
                         st.rerun()
                 else:
@@ -304,8 +316,8 @@ def render(subset: pd.DataFrame, tab: str = ""):
                         with c1:
                             if st.button("Send Both", key=f"1hr_send_{tab}_{r['id']}", type="primary"):
                                 with st.spinner("Sending..."):
-                                    do_1hr_invite(r["id"], r.get("phone") or "",
-                                                  r.get("email") or "", sms_msg, email_msg)
+                                    do_1hr_invite(r["id"], _s(r.get("phone")),
+                                                  _s(r.get("email")), sms_msg, email_msg)
                                 st.session_state.pop(f"show_1hr_{r['id']}", None)
                                 st.success("1-hr invite sent!")
                                 st.rerun()
@@ -322,8 +334,8 @@ def render(subset: pd.DataFrame, tab: str = ""):
             st.divider()
             render_conversation(
                 applicant_id=str(r["id"]),
-                phone=str(r.get("phone") or ""),
-                email=str(r.get("email") or ""),
+                phone=_s(r.get("phone")),
+                email=_s(r.get("email")),
             )
 
 
