@@ -1,4 +1,4 @@
-"""Entry point for the Stretch Zone 1082 hiring agent."""
+"""Entry point for the Stretch Zone hiring agent."""
 
 import argparse
 import logging

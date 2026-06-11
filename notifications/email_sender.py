@@ -20,7 +20,7 @@ TOKEN_URL = (
     f"https://login.microsoftonline.com/{config.GRAPH_TENANT_ID}/oauth2/v2.0/token"
 )
 
-SUBJECT_TEMPLATE = "Next step — Stretch Practitioner interview (Stretch Zone 1082)"
+SUBJECT_TEMPLATE = "Next step — Stretch Practitioner interview"
 
 BODY_TEMPLATE = (
     "{first_name}, thank you for your interest in the Stretch Practitioner position. "

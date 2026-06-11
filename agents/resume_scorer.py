@@ -36,7 +36,7 @@ SCORING_MODEL = "claude-sonnet-4-20250514"
 _client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 SYSTEM_PROMPT = """\
-You are a hiring evaluator for Stretch Zone 1082, a guided-stretching studio in Meridian, ID.
+You are a hiring evaluator for Stretch Zone, a guided-stretching studio in Meridian, ID.
 Your job is to score a job applicant using the rubric below and return ONLY a JSON object.
 
 ─── RUBRIC ────────────────────────────────────────────────────────────────────

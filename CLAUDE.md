@@ -1,4 +1,4 @@
-# Stretch Zone 1082 — Hiring Agent
+# Stretch Zone — Hiring Agent
 
 Autonomous hiring agent for Stretch Zone franchise 1082 (Meridian, ID).
 Watches for new CareerPlug applications, scores them with Claude, and sends
@@ -82,7 +82,7 @@ Both channels fire only when `score >= SCORE_NOTIFY_THRESHOLD` **and** `auto_dis
 - **Not SMTP. Not Gmail. No `smtplib`.**
 - `send_outreach_email()` — used by the auto-pipeline (`main.py`); uses `POST /sendMail`, returns bool
 - `send_email(to, subject, body)` — used by the dashboard; uses draft→send (`POST /messages` then `POST /messages/{id}/send`) so the Graph message ID is available immediately for dedup logging in the `messages` table
-- Subject: `Next step — Stretch Practitioner interview (Stretch Zone 1082)`
+- Subject: `Next step — Stretch Practitioner interview (Stretch Zone)`
 - Body template:
   ```
   {first_name}, thank you for your interest in the Stretch Practitioner position.

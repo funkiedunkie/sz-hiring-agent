@@ -11,7 +11,7 @@ from notifications.email_sender import send_email
 
 logger = logging.getLogger(__name__)
 
-FOLLOW_UP_SUBJECT = "Following up — Stretch Practitioner position (Stretch Zone 1082)"
+FOLLOW_UP_SUBJECT = "Following up — Stretch Practitioner position"
 
 
 def _sms_body(first_name: str) -> str:

@@ -1,4 +1,4 @@
-"""Stretch Zone 1082 — Hiring Dashboard"""
+"""Stretch Zone — Hiring Dashboard"""
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timezone, timedelta
@@ -36,7 +36,7 @@ from sync.sms_sync import sync_all as sync_sms
 from sync.email_sync import sync_all as sync_email
 from scrapers.careerplug import deactivate_applicant, DEACTIVATE_REASONS
 
-st.set_page_config(page_title="SZ 1082 Hiring", layout="wide", page_icon="💪")
+st.set_page_config(page_title="Stretch Zone Hiring", layout="wide", page_icon="💪")
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -77,7 +77,7 @@ def do_invite(row_id: str, name: str, phone: str, email: str):
         f"You can grab a time here: {config.CALENDLY_LINK}. "
         f"Thanks, Duncan Richardson"
     )
-    email_subj = "Next step — Stretch Practitioner interview (Stretch Zone 1082)"
+    email_subj = "Next step — Stretch Practitioner interview"
     if email:
         email_id = send_email(email, email_subj, email_body)
         if email_id:
@@ -112,10 +112,10 @@ def do_1hr_invite(row_id: str, phone: str, email: str, sms_body: str, email_body
                  body=sms_body.strip(), external_id=sid, sent_at=now)
             sent += 1
     if email and email_body.strip():
-        email_id = send_email(email, "1-Hour Interview — Stretch Zone 1082", email_body.strip())
+        email_id = send_email(email, "1-Hour Interview — Stretch Zone", email_body.strip())
         if email_id:
             _ins(applicant_id=row_id, channel="email", direction="outbound",
-                 body=email_body.strip(), subject="1-Hour Interview — Stretch Zone 1082",
+                 body=email_body.strip(), subject="1-Hour Interview — Stretch Zone",
                  external_id=email_id, sent_at=now)
             sent += 1
     if sent:
@@ -127,7 +127,7 @@ def do_1hr_invite(row_id: str, phone: str, email: str, sms_body: str, email_body
 
 # ── Header ────────────────────────────────────────────────────────────────────
 
-st.title("Stretch Zone 1082 — Hiring")
+st.title("Stretch Zone — Hiring")
 
 col_refresh, col_sync, col_archived, _ = st.columns([1, 2, 2, 3])
 with col_refresh:
