@@ -30,3 +30,6 @@ SCORE_NOTIFY_THRESHOLD = int(os.getenv("SCORE_NOTIFY_THRESHOLD", "2"))  # 1–4 
 CLUBREADY_USERNAME = os.getenv("CLUBREADY_USERNAME", "")
 CLUBREADY_PASSWORD = os.getenv("CLUBREADY_PASSWORD", "")
 CLUBREADY_FALLBACK_EMAIL = os.getenv("CLUBREADY_FALLBACK_EMAIL", "boise@stretchzone.com")
+
+# Manager notifications (optional — Duncan's phone for reply alerts)
+MANAGER_PHONE = os.getenv("MANAGER_PHONE", "")

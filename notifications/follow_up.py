@@ -69,8 +69,14 @@ def _stale_days_for_archive(applicant: dict, messages: list) -> int:
     if messages:
         most_recent = messages[-1]
         if most_recent["direction"] == "inbound":
-            return 0
-        start = most_recent.get("sent_at") or most_recent.get("created_at")
+            inbound_ts = most_recent.get("sent_at") or most_recent.get("created_at")
+            inbound_age = _business_days_since(inbound_ts)
+            if inbound_age <= 5:
+                return 0  # recently replied; give Duncan time to respond
+            # After 5 days with no reply from us, clock runs from their message
+            start = inbound_ts
+        else:
+            start = most_recent.get("sent_at") or most_recent.get("created_at")
     elif applicant.get("invite_sent_at"):
         start = applicant["invite_sent_at"]
     else:
@@ -123,7 +129,7 @@ def send_follow_up(applicant: dict) -> bool:
             logger.info("Follow-up email sent to %s (%s)", applicant.get("name"), applicant_id)
 
     if sent:
-        db.table("applicants").update({"followup_sent_at": now}).eq("id", applicant_id).execute()
+        db.table("applicants").update({"followup_sent_at": now}).eq("id", applicant_id).is_("followup_sent_at", "null").execute()
 
     return sent
 
@@ -149,6 +155,97 @@ def run_follow_ups() -> int:
                 sent_count += 1
 
     logger.info("Follow-up run complete: %d sent", sent_count)
+    return sent_count
+
+
+def run_reply_notifications() -> int:
+    """
+    Text the manager (MANAGER_PHONE) when a candidate replied and the agent
+    couldn't handle it autonomously.
+
+    Dedup: only notifies when the most recent inbound message is newer than
+    reply_notified_at, so the same reply never triggers two texts.
+    Skips candidates who are already fully handled (booked, fallback sent).
+    Returns count of notifications sent.
+    """
+    manager_phone = config.MANAGER_PHONE
+    if not manager_phone:
+        return 0
+
+    resp = (
+        db.table("applicants")
+        .select(
+            "id, name, reply_notified_at, calendly_booked, scheduled_block_at, "
+            "scheduling_fallback_sent_at, auto_disqualified"
+        )
+        .neq("archived", True)
+        .not_.is_("invite_sent_at", "null")
+        .execute()
+    )
+    candidates = resp.data or []
+    if not candidates:
+        return 0
+
+    ids = [c["id"] for c in candidates]
+    msgs_resp = (
+        db.table("messages")
+        .select("applicant_id, body, sent_at, created_at")
+        .in_("applicant_id", ids)
+        .eq("direction", "inbound")
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    # Keep only the most recent inbound per applicant
+    latest_inbound: dict[str, dict] = {}
+    for m in (msgs_resp.data or []):
+        if m["applicant_id"] not in latest_inbound:
+            latest_inbound[m["applicant_id"]] = m
+
+    sent_count = 0
+    for c in candidates:
+        if c.get("auto_disqualified"):
+            continue
+        if c.get("calendly_booked") or c.get("scheduled_block_at"):
+            continue
+        if c.get("scheduling_fallback_sent_at"):
+            continue
+
+        latest = latest_inbound.get(c["id"])
+        if not latest:
+            continue
+
+        inbound_ts = latest.get("sent_at") or latest.get("created_at") or ""
+        notified_at = c.get("reply_notified_at") or ""
+
+        # Skip if we already notified about this reply (or a newer one)
+        if notified_at and inbound_ts <= notified_at:
+            continue
+
+        first_name = (str(c.get("name") or "").split()[0]) or "A candidate"
+        snippet = (latest.get("body") or "").strip()
+        if len(snippet) > 60:
+            snippet = snippet[:57] + "..."
+
+        if snippet:
+            body = (
+                f"Hi Duncan — {first_name} replied: \"{snippet}\" — "
+                f"I need your direction. Check the dashboard. — SZ Agent"
+            )
+        else:
+            body = (
+                f"Hi Duncan — {first_name} replied and needs a response. "
+                f"Check the dashboard. — SZ Agent"
+            )
+
+        sid = send_sms(manager_phone, body)
+        if sid:
+            now = datetime.now(timezone.utc).isoformat()
+            db.table("applicants").update({"reply_notified_at": now}).eq("id", c["id"]).execute()
+            sent_count += 1
+            logger.info("Manager notified about reply from %s", c.get("name"))
+
+    logger.info("Reply notification run complete: %d sent", sent_count)
     return sent_count
 
 

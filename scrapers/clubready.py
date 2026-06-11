@@ -73,7 +73,7 @@ def _load_grid(page: Page, date_str: str) -> None:
     page.wait_for_load_state("networkidle")
     page.wait_for_timeout(2000)
     js_date = f"{date_str} 8:00:00 AM"
-    page.evaluate(f"updategrid('{js_date}')")
+    page.evaluate("(d) => updategrid(d)", js_date)
     page.wait_for_load_state("networkidle")
     page.wait_for_timeout(3000)
 

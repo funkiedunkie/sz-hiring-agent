@@ -15,7 +15,7 @@ Flow:
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import config
 from db.supabase_logger import _client as db
@@ -26,6 +26,27 @@ from agents.availability_parser import parse_availability
 from scrapers.clubready import block_time
 
 logger = logging.getLogger(__name__)
+
+
+def _business_days_since(ts_str: str) -> int:
+    """Count business days (Mon–Fri) from ts_str to now."""
+    if not ts_str:
+        return 0
+    try:
+        ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        days = 0
+        current = ts.date()
+        end = datetime.now(timezone.utc).date()
+        while current < end:
+            current += timedelta(days=1)
+            if current.weekday() < 5:
+                days += 1
+        return days
+    except Exception:
+        return 0
+
 
 AVAIL_REQUEST_SUBJECT = "Scheduling your stretch — Stretch Zone"
 
@@ -238,19 +259,39 @@ def process_scheduling_replies() -> int:
 
             if ok:
                 now = datetime.now(timezone.utc).isoformat()
-                db.table("applicants").update({
+                result = db.table("applicants").update({
                     "scheduled_block_at": now,
                     "calendly_booked": True,
-                }).eq("id", c["id"]).execute()
+                }).eq("id", c["id"]).is_("scheduled_block_at", "null").execute()
+                if not result.data:
+                    logger.warning("Concurrent run already booked %s; skipping confirmation", c.get("name"))
+                    booked = True
+                    break
                 _send_confirmation(c, date_str, time_str, pref_ch)
                 logger.info("Booked %s for %s at %s", c.get("name"), date_str, time_str)
                 booked = True
                 break
 
         if not booked:
-            _send_fallback(c)
-
-        processed += 1
+            if slots:
+                # Parsed real slots but none were available in ClubReady — hand off now.
+                _send_fallback(c)
+                processed += 1
+            else:
+                # No parseable availability — could be a question or a decline.
+                # Wait 2 business days before handing off, giving Duncan time to
+                # reply manually and the candidate time to send proper availability.
+                days_since = _business_days_since(c["scheduling_requested_at"])
+                if days_since >= 2:
+                    _send_fallback(c)
+                    processed += 1
+                else:
+                    logger.info(
+                        "%s replied without parseable slots; waiting (day %d of 2)",
+                        c.get("name"), days_since,
+                    )
+        else:
+            processed += 1
 
     logger.info("Scheduling run complete: %d processed", processed)
     return processed

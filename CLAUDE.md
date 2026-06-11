@@ -26,7 +26,7 @@ sync/email_sync.py  (cron / dashboard button)
   └─▶ Graph API inbox + sentitems → backfill all emails for known applicants
 
 follow_up.py  (cron, runs after main.py)
-  └─▶ notifications/follow_up.py → send follow-up to non-responders after 2 business days
+  └─▶ notifications/follow_up.py → follow-ups, auto-archive, manager reply notifications
 
 schedule_interviews.py  (cron, runs after follow_up.py)
   └─▶ notifications/scheduling.py → parse availability replies → ClubReady booking → confirm or fallback
@@ -50,8 +50,8 @@ dashboard.py (Streamlit)
 | `sync/sms_sync.py` | Backfill Twilio inbound+outbound SMS into `messages` for all known applicants |
 | `sync/email_sync.py` | Backfill Graph inbox+sentitems emails into `messages` for all known applicants |
 | `main.py` | Orchestrates the full pipeline |
-| `follow_up.py` | Cron entry point: sends follow-ups to non-responders (calls `notifications/follow_up.py`) |
-| `notifications/follow_up.py` | Follow-up logic: 2-business-day window, preferred-channel routing, dedup via `followup_sent_at` |
+| `follow_up.py` | Cron entry point: follow-ups, auto-archive, manager notifications (calls `notifications/follow_up.py`) |
+| `notifications/follow_up.py` | Follow-up logic + `run_reply_notifications()`: texts `MANAGER_PHONE` when a candidate replied and the agent needs direction; dedup via `reply_notified_at` |
 | `schedule_interviews.py` | Cron entry point: processes availability replies and books ClubReady slots |
 | `scrapers/clubready.py` | Playwright: `block_time(date_str, time_str, name, phone, email)` blocks 30-min slot in ClubReady (blue, detail note) |
 | `agents/availability_parser.py` | Claude parser: `parse_availability(reply_text)` → `[{date, time}]` |
@@ -247,6 +247,9 @@ CLUBREADY_USERNAME             # ClubReady login username
 CLUBREADY_PASSWORD             # ClubReady login password
 CLUBREADY_FALLBACK_EMAIL       # default: boise@stretchzone.com
 
+# Manager notifications (optional)
+MANAGER_PHONE                  # Duncan's E.164 phone number; if set, agent texts when a candidate reply needs direction
+
 # Optional
 EMAIL_TRIGGER_SUBJECT          # default: "New Application"
 SCORE_NOTIFY_THRESHOLD         # default: 2  (1–4 star scale)
@@ -280,7 +283,8 @@ create table if not exists applicants (
     scheduling_requested_at   timestamptz,   -- when availability request was sent
     scheduled_block_at        timestamptz,   -- when ClubReady block was successfully booked
     scheduling_fallback_sent_at timestamptz, -- when fallback email was sent to Boise staff
-    archived                  boolean default false
+    archived                  boolean default false,
+    reply_notified_at         timestamptz    -- when manager was last texted about a candidate reply
 );
 ```
 
@@ -318,6 +322,25 @@ Runs automatically via `follow_up.py` after `main.py` on every cron tick.
 - Email: longer — check in, calendar link, no-pressure opt-out
 
 **Dedup:** `followup_sent_at` is set on success; subsequent cron runs skip the applicant.
+
+## Manager reply notifications — `run_reply_notifications()` in `notifications/follow_up.py`
+
+Runs on every cron tick (inside `follow_up.py`). Texts `MANAGER_PHONE` whenever a candidate replied and the agent needs human direction.
+
+**Triggers a text when:**
+- Candidate has an inbound message newer than `reply_notified_at` (or `reply_notified_at` is null)
+- Candidate is not already fully handled: `calendly_booked = false`, `scheduled_block_at` null, `scheduling_fallback_sent_at` null
+- `MANAGER_PHONE` env var is set
+
+**Text format:**
+`"Hi Duncan — {first_name} replied: "{snippet}" — I need your direction. Check the dashboard. — SZ Agent"`
+
+**Dedup:** `reply_notified_at` is set to now on send. Resets automatically on the next inbound (any new inbound with a timestamp newer than `reply_notified_at` triggers a fresh notification). No re-notification for the same message across cron ticks.
+
+**Does not notify when:**
+- `calendly_booked = true` or `scheduled_block_at` set (already handled)
+- `scheduling_fallback_sent_at` set (already escalated to boise@)
+- `MANAGER_PHONE` not set (graceful no-op)
 
 ## Staleness system — dashboard + auto-archive
 

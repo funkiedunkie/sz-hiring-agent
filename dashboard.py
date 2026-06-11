@@ -239,8 +239,14 @@ def _staleness_days(applicant: dict, messages: list) -> int:
     if messages:
         most_recent = messages[-1]  # sorted oldest-first by get_messages_for_applicant
         if most_recent["direction"] == "inbound":
-            return 0  # they replied; ball is in our court
-        start = most_recent.get("sent_at") or most_recent.get("created_at")
+            inbound_ts = most_recent.get("sent_at") or most_recent.get("created_at")
+            inbound_age = _business_days_since(inbound_ts)
+            if inbound_age <= 5:
+                return 0  # recently replied; ball is in our court
+            # After 5 days with no reply from us, start counting from their message
+            start = inbound_ts
+        else:
+            start = most_recent.get("sent_at") or most_recent.get("created_at")
     elif applicant.get("invite_sent_at"):
         start = applicant["invite_sent_at"]
     else:
