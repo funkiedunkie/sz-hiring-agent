@@ -87,17 +87,23 @@ def do_invite(row_id: str, name: str, phone: str, email: str):
                            body=email_body, subject=email_subj,
                            external_id=email_id, sent_at=now)
 
-def do_deactivate(row_id: str, profile_url: str, reason: str) -> bool:
+def do_deactivate(row_id: str, profile_url: str, reason: str) -> tuple[bool, str]:
     """Archive in Supabase (always), then attempt CareerPlug deactivation.
-    Returns True if CareerPlug succeeded, False if it failed (archived either way)."""
-    db.table("applicants").update({"archived": True}).eq("id", row_id).execute()
+    Returns (cp_ok, message). Supabase archive always runs first."""
+    # Step 1: Supabase — must succeed
+    try:
+        resp = db.table("applicants").update({"archived": True}).eq("id", str(row_id)).execute()
+    except Exception as e:
+        return False, f"Supabase update failed: {e}"
+
+    # Step 2: CareerPlug — best effort, catch everything including asyncio errors
     try:
         deactivate_applicant(profile_url, reason)
-        return True
-    except Exception:
+        return True, f"{reason} — archived and deactivated in CareerPlug."
+    except BaseException as e:
         import traceback
         traceback.print_exc()
-        return False
+        return False, f"Archived. CareerPlug deactivation failed: {type(e).__name__}: {e}"
 
 def do_mark_booked(row_id: str):
     db.table("applicants").update({"calendly_booked": True}).eq("id", row_id).execute()
@@ -598,12 +604,10 @@ def render(subset: pd.DataFrame, tab: str = ""):
                         with c_dq1:
                             if st.button("Confirm & Archive", key=f"dq_confirm_{tab}_{r['id']}", type="primary"):
                                 with st.spinner("Deactivating in CareerPlug..."):
-                                    ok = do_deactivate(r["id"], _s(r.get("profile_url")), dq_reason)
+                                    cp_ok, msg = do_deactivate(r["id"], _s(r.get("profile_url")), dq_reason)
                                 st.session_state.pop(f"show_dq_{r['id']}", None)
-                                if ok:
-                                    st.session_state["flash"] = ("success", f"{r['name']} deactivated in CareerPlug and archived.")
-                                else:
-                                    st.session_state["flash"] = ("warning", f"{r['name']} archived from dashboard, but CareerPlug deactivation failed — deactivate manually in CareerPlug.")
+                                level = "success" if cp_ok else "warning"
+                                st.session_state["flash"] = (level, f"{r['name']}: {msg}")
                                 st.rerun()
                         with c_dq2:
                             if st.button("Cancel", key=f"dq_cancel_{tab}_{r['id']}"):
