@@ -590,12 +590,12 @@ def render(subset: pd.DataFrame, tab: str = ""):
                             if st.button("Confirm & Archive", key=f"dq_confirm_{tab}_{r['id']}", type="primary"):
                                 with st.spinner("Deactivating in CareerPlug..."):
                                     ok = do_deactivate(r["id"], _s(r.get("profile_url")), dq_reason)
-                                st.session_state.pop(f"show_dq_{r['id']}", None)
                                 if ok:
+                                    st.session_state.pop(f"show_dq_{r['id']}", None)
                                     st.success("Deactivated in CareerPlug and archived.")
+                                    st.rerun()
                                 else:
-                                    st.error("CareerPlug deactivation failed — check logs. Not archived.")
-                                st.rerun()
+                                    st.error("CareerPlug deactivation failed — check logs. Applicant NOT archived.")
                         with c_dq2:
                             if st.button("Cancel", key=f"dq_cancel_{tab}_{r['id']}"):
                                 st.session_state.pop(f"show_dq_{r['id']}", None)
