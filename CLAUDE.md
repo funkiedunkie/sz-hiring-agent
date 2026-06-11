@@ -360,7 +360,8 @@ Runs on every cron tick (inside `follow_up.py`). Texts `MANAGER_PHONE` whenever 
 
 ### Clock rules
 - **Most recent message is outbound** → clock runs from that message's `sent_at`
-- **Most recent message is inbound** → clock paused (GREEN); ball is in our court
+- **Most recent message is inbound, ≤ 5 business days ago** → GREEN; ball is in our court
+- **Most recent message is inbound, > 5 business days ago** → clock runs from that inbound's timestamp (unanswered reply escalates to amber/red/auto-archive)
 - **No messages, was invited** → clock from `invite_sent_at`
 - **DQ'd (no messages ever sent)** → clock from `created_at`
 - **`calendly_booked = true` or `scheduled_block_at` is set** → always GREEN regardless of messages
