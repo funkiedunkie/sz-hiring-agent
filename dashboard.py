@@ -1,7 +1,7 @@
 """Stretch Zone 1082 — Hiring Dashboard"""
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import re
 import config
@@ -196,11 +196,73 @@ def fmt_dt(ts) -> str:
         return str(ts)
 
 
+# ── Staleness helpers ─────────────────────────────────────────────────────────
+
+_STALE_COLORS = {
+    0: "#27ae60",  # green
+    1: "#27ae60",  # green
+    2: "#82e0aa",  # light green
+    3: "#d4ac0d",  # dark yellow
+    4: "#f9e79f",  # light yellow
+    5: "#cb9b6e",  # light brown
+    6: "#7d4e20",  # brown
+    7: "#1a1a1a",  # black
+}
+
+
+def _business_days_since(ts_str) -> int:
+    """Count business days (Mon-Fri) from ts_str to today."""
+    if not ts_str:
+        return 0
+    try:
+        ts = pd.to_datetime(ts_str, utc=True)
+        days = 0
+        current = ts.date()
+        end = datetime.now(timezone.utc).date()
+        while current < end:
+            current += timedelta(days=1)
+            if current.weekday() < 5:
+                days += 1
+        return days
+    except Exception:
+        return 0
+
+
+def _staleness_days(applicant: dict, messages: list) -> int:
+    """Business days the ball has been in the candidate's court (0 = green)."""
+    if applicant.get("calendly_booked"):
+        return 0
+    if messages:
+        most_recent = messages[-1]  # sorted oldest-first by get_messages_for_applicant
+        if most_recent["direction"] == "inbound":
+            return 0  # they replied; ball is in our court
+        start = most_recent.get("sent_at") or most_recent.get("created_at")
+    elif applicant.get("invite_sent_at"):
+        start = applicant["invite_sent_at"]
+    else:
+        start = applicant.get("created_at")
+    return _business_days_since(start)
+
+
+def _stale_color(days: int) -> str:
+    return _STALE_COLORS.get(min(days, 7), "#1a1a1a")
+
+
+def _preferred_channel_from_messages(messages: list) -> str | None:
+    """Return the channel of the first inbound message, or None."""
+    for m in messages:
+        if m["direction"] == "inbound":
+            return m["channel"]
+    return None
+
+
 def render_conversation(applicant_id: str, phone: str, email: str, tab: str = "",
-                        sms_sid: str = "", invite_sent_at: str = ""):
+                        sms_sid: str = "", invite_sent_at: str = "",
+                        preferred_channel: str | None = None,
+                        prefetched_messages: list | None = None):
     """Render the threaded message history and reply controls for one applicant."""
     k = f"{tab}_{applicant_id}"  # unique key prefix per tab+applicant
-    messages = get_messages_for_applicant(applicant_id)
+    messages = prefetched_messages if prefetched_messages is not None else get_messages_for_applicant(applicant_id)
 
     # Synthetic entry for pre-messages-table invites (sms_sid set but no DB row)
     has_invite_msg = any(
@@ -253,7 +315,10 @@ def render_conversation(applicant_id: str, phone: str, email: str, tab: str = ""
 
     st.markdown("**Reply**")
 
-    reply_tab_sms, reply_tab_email = st.tabs(["📱 SMS", "✉️ Email"])
+    if preferred_channel == "email":
+        reply_tab_email, reply_tab_sms = st.tabs(["✉️ Email", "📱 SMS"])
+    else:
+        reply_tab_sms, reply_tab_email = st.tabs(["📱 SMS", "✉️ Email"])
 
     with reply_tab_sms:
         sms_body = st.text_area(
@@ -336,13 +401,27 @@ def render(subset: pd.DataFrame, tab: str = ""):
         if is_1hr:     label += "  🎯"
         if is_booked:  label += "  📅"
 
+        messages = get_messages_for_applicant(str(r["id"]))
+        pref_ch = _preferred_channel_from_messages(messages)
+        stale_days = _staleness_days(dict(r), messages)
+        color = _stale_color(stale_days)
+        if stale_days > 0:
+            label += f"  · Day {stale_days}"
+
+        st.markdown(
+            f'<div style="height:5px;background:{color};border-radius:3px;margin-bottom:2px;"></div>',
+            unsafe_allow_html=True,
+        )
         with st.expander(label):
             left, right = st.columns([3, 1])
 
             with left:
+                pref_badge = ("  📱 Prefers SMS" if pref_ch == "sms"
+                              else "  ✉️ Prefers Email" if pref_ch == "email"
+                              else "")
                 st.markdown(
                     f"**Email:** {_s(r.get('email')) or '—'}  \n"
-                    f"**Phone:** {_s(r.get('phone')) or '—'}"
+                    f"**Phone:** {_s(r.get('phone')) or '—'}{pref_badge}"
                 )
                 applied = fmt_dt(r.get("created_at"))
                 if applied:
@@ -404,17 +483,49 @@ def render(subset: pd.DataFrame, tab: str = ""):
                             f"You can book a time here: {config.CALENDLY_LINK_1HR}\n\n"
                             f"Thanks,\nDuncan Richardson"
                         )
-                        sms_msg = st.text_area(
-                            "SMS message", value=default_sms,
-                            key=f"1hr_sms_{tab}_{r['id']}", height=100,
-                        )
-                        email_msg = st.text_area(
-                            "Email message", value=default_email,
-                            key=f"1hr_email_{tab}_{r['id']}", height=130,
-                        )
+                        if pref_ch == "sms":
+                            st.caption("📱 Sending via preferred channel (SMS)")
+                            sms_msg = st.text_area(
+                                "SMS message", value=default_sms,
+                                key=f"1hr_sms_{tab}_{r['id']}", height=100,
+                            )
+                            also_email = st.checkbox(
+                                "Also send email", value=False,
+                                key=f"1hr_also_email_{tab}_{r['id']}",
+                            )
+                            email_msg = st.text_area(
+                                "Email message", value=default_email,
+                                key=f"1hr_email_{tab}_{r['id']}", height=130,
+                            ) if also_email else ""
+                            btn_label = "Send Both" if also_email else "Send SMS"
+                        elif pref_ch == "email":
+                            st.caption("✉️ Sending via preferred channel (Email)")
+                            email_msg = st.text_area(
+                                "Email message", value=default_email,
+                                key=f"1hr_email_{tab}_{r['id']}", height=130,
+                            )
+                            also_sms = st.checkbox(
+                                "Also send SMS", value=False,
+                                key=f"1hr_also_sms_{tab}_{r['id']}",
+                            )
+                            sms_msg = st.text_area(
+                                "SMS message", value=default_sms,
+                                key=f"1hr_sms_{tab}_{r['id']}", height=100,
+                            ) if also_sms else ""
+                            btn_label = "Send Both" if also_sms else "Send Email"
+                        else:
+                            sms_msg = st.text_area(
+                                "SMS message", value=default_sms,
+                                key=f"1hr_sms_{tab}_{r['id']}", height=100,
+                            )
+                            email_msg = st.text_area(
+                                "Email message", value=default_email,
+                                key=f"1hr_email_{tab}_{r['id']}", height=130,
+                            )
+                            btn_label = "Send Both"
                         c1, c2 = st.columns(2)
                         with c1:
-                            if st.button("Send Both", key=f"1hr_send_{tab}_{r['id']}", type="primary"):
+                            if st.button(btn_label, key=f"1hr_send_{tab}_{r['id']}", type="primary"):
                                 with st.spinner("Sending..."):
                                     sent_count = do_1hr_invite(r["id"], _s(r.get("phone")),
                                                                _s(r.get("email")), sms_msg, email_msg)
@@ -478,6 +589,8 @@ def render(subset: pd.DataFrame, tab: str = ""):
                 tab=tab,
                 sms_sid=_s(r.get("sms_sid")),
                 invite_sent_at=_s(r.get("invite_sent_at")),
+                preferred_channel=pref_ch,
+                prefetched_messages=messages,
             )
 
 

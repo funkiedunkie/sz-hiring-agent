@@ -54,3 +54,17 @@ def get_messages_for_applicant(applicant_id: str) -> list[dict[str, Any]]:
         .execute()
     )
     return resp.data or []
+
+
+def get_preferred_channel(applicant_id: str) -> str | None:
+    """Return 'sms' or 'email' based on which channel the candidate first replied on."""
+    resp = (
+        db.table(TABLE)
+        .select("channel")
+        .eq("applicant_id", applicant_id)
+        .eq("direction", "inbound")
+        .order("sent_at", desc=False)
+        .limit(1)
+        .execute()
+    )
+    return resp.data[0]["channel"] if resp.data else None

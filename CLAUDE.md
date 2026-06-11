@@ -25,6 +25,9 @@ sync/sms_sync.py  (cron / dashboard button)
 sync/email_sync.py  (cron / dashboard button)
   └─▶ Graph API inbox + sentitems → backfill all emails for known applicants
 
+follow_up.py  (cron, runs after main.py)
+  └─▶ notifications/follow_up.py → send follow-up to non-responders after 2 business days
+
 dashboard.py (Streamlit)
   └─▶ per-applicant conversation thread (SMS + email interleaved) + reply controls
 ```
@@ -44,6 +47,8 @@ dashboard.py (Streamlit)
 | `sync/sms_sync.py` | Backfill Twilio inbound+outbound SMS into `messages` for all known applicants |
 | `sync/email_sync.py` | Backfill Graph inbox+sentitems emails into `messages` for all known applicants |
 | `main.py` | Orchestrates the full pipeline |
+| `follow_up.py` | Cron entry point: sends follow-ups to non-responders (calls `notifications/follow_up.py`) |
+| `notifications/follow_up.py` | Follow-up logic: 2-business-day window, preferred-channel routing, dedup via `followup_sent_at` |
 | `backfill.py` | One-shot backfill: scrapes all CareerPlug apps, skips ones already in Supabase, runs full pipeline for new ones |
 | `dashboard.py` | Streamlit dashboard: applicant cards + per-applicant SMS/email conversation thread + reply UI |
 | `supabase/functions/calendly-webhook/index.ts` | Edge Function: marks applicant as booked on Calendly `invitee.created` |
@@ -220,6 +225,7 @@ create table if not exists applicants (
     trigger_subject      text,
     one_hr_invited       boolean default false,
     one_hr_invite_sent_at timestamptz,
+    followup_sent_at     timestamptz,
     archived             boolean default false
 );
 ```
@@ -239,6 +245,55 @@ create table if not exists messages (
     sent_at      timestamptz
 );
 ```
+
+## Follow-up outreach — `notifications/follow_up.py`
+
+Runs automatically via `follow_up.py` after `main.py` on every cron tick.
+
+**Eligibility criteria (all must be true):**
+- `invite_sent_at` is not null (was invited)
+- `followup_sent_at` is null (not yet followed up)
+- No inbound messages exist for this applicant (they haven't replied)
+- `archived = false`, `auto_disqualified = false`
+- 2 business days (Mon–Fri) have passed since `invite_sent_at`
+
+**Channel routing:** uses `preferred_channel` (first inbound channel) if known; otherwise defaults to SMS if phone is available, email otherwise.
+
+**Messages:**
+- SMS: short — "Hi {first_name}, still interested in Stretch Zone? Grab a time here: {link} or just reply to let me know either way. Thanks, Duncan"
+- Email: longer — check in, calendar link, no-pressure opt-out
+
+**Dedup:** `followup_sent_at` is set on success; subsequent cron runs skip the applicant.
+
+## Staleness system — dashboard + auto-archive
+
+### Color chart (business days the ball is in the candidate's court)
+
+| Days | Color | Hex |
+|------|-------|-----|
+| 0 (booked or they replied) | Green | `#27ae60` |
+| 1 | Green | `#27ae60` |
+| 2 | Light green | `#82e0aa` |
+| 3 | Dark yellow | `#d4ac0d` |
+| 4 | Light yellow | `#f9e79f` |
+| 5 | Light brown | `#cb9b6e` |
+| 6 | Brown | `#7d4e20` |
+| 7 | Black | `#1a1a1a` |
+| 8+ | Auto-archived | — |
+
+### Clock rules
+- **Most recent message is outbound** → clock runs from that message's `sent_at`
+- **Most recent message is inbound** → clock paused (GREEN); ball is in our court
+- **No messages, was invited** → clock from `invite_sent_at`
+- **DQ'd (no messages ever sent)** → clock from `created_at`
+- **`calendly_booked = true`** → always GREEN regardless of messages
+
+A colored bar renders above each card in the dashboard. The expander label also shows `· Day N` when N > 0.
+
+### Day 8 auto-archive (runs in `follow_up.py` via `run_auto_archive()`)
+- **Auto-DQ'd candidates:** deactivate in CareerPlug ("Did not meet desired qualifications") + archive in Supabase
+- **Invited, unresponsive candidates:** deactivate in CareerPlug ("Unresponsive") + archive in Supabase
+- **Calendly-booked candidates:** exempt (never auto-archived by this logic)
 
 ## Deployment — GitHub Actions (primary)
 

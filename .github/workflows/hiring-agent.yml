@@ -57,5 +57,24 @@ jobs:
           GRAPH_USER_EMAIL: ${{ secrets.GRAPH_USER_EMAIL }}
           EMAIL_TRIGGER_SUBJECT: ${{ secrets.EMAIL_TRIGGER_SUBJECT }}
           CALENDLY_LINK: ${{ secrets.CALENDLY_LINK }}
+          CALENDLY_LINK_1HR: ${{ secrets.CALENDLY_LINK_1HR }}
           SCORE_NOTIFY_THRESHOLD: ${{ secrets.SCORE_NOTIFY_THRESHOLD }}
         run: python main.py
+
+      - name: Run follow-up agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CAREERPLUG_EMAIL: ${{ secrets.CAREERPLUG_EMAIL }}
+          CAREERPLUG_PASSWORD: ${{ secrets.CAREERPLUG_PASSWORD }}
+          CAREERPLUG_COMPANY_SLUG: ${{ secrets.CAREERPLUG_COMPANY_SLUG }}
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_FROM_NUMBER: ${{ secrets.TWILIO_FROM_NUMBER }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GRAPH_TENANT_ID: ${{ secrets.GRAPH_TENANT_ID }}
+          GRAPH_CLIENT_ID: ${{ secrets.GRAPH_CLIENT_ID }}
+          GRAPH_CLIENT_SECRET: ${{ secrets.GRAPH_CLIENT_SECRET }}
+          GRAPH_USER_EMAIL: ${{ secrets.GRAPH_USER_EMAIL }}
+          CALENDLY_LINK: ${{ secrets.CALENDLY_LINK }}
+        run: python follow_up.py
