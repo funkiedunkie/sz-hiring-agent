@@ -96,11 +96,13 @@ Both channels fire only when `score >= SCORE_NOTIFY_THRESHOLD` **and** `auto_dis
 Streamlit app. Run with `streamlit run dashboard.py`.
 
 - **📥 Sync Messages** button triggers `sync/sms_sync.py` + `sync/email_sync.py` on demand
+- Each applicant card has a **staleness color bar** above it (green → black over 7 business days); card label shows `· Day N` when N > 0
 - Each applicant card expands to show a threaded conversation (SMS 📱 and email ✉️ interleaved, oldest first)
-- **Reply** section has two tabs — SMS and Email — each with a compose area and Send button
+- **Preferred channel** is detected from the candidate's first inbound message and shown as a badge (`📱 Prefers SMS` / `✉️ Prefers Email`); reply tabs are reordered so preferred channel appears first
+- **Reply** section has two tabs — ordered by preferred channel — each with a compose area and Send button
 - Outbound messages sent from the dashboard are logged to the `messages` table immediately
 - Inbound SMS arrives in real-time via the `twilio-webhook` Edge Function; email replies arrive on next sync
-- **Advance to 1-Hr Interview** button: reveals editable SMS + email forms pre-filled with the 1-hr Calendly link (`CALENDLY_LINK_1HR`); "Send Both" fires both channels, logs to `messages`, and sets `one_hr_invited = true` on the applicant
+- **Advance to 1-Hr Interview** button: reveals a form defaulting to the candidate's preferred channel (with opt-in checkbox for the other channel); pre-filled with the 1-hr Calendly link (`CALENDLY_LINK_1HR`); logs to `messages` and sets `one_hr_invited = true`
 - **Archive / Unarchive** button per card: soft-deletes the applicant (`archived = true`); archived applicants are hidden by default and skipped by sync
 - **Show archived** toggle in the header: reveals archived applicants; shows Unarchive button instead of Archive
 - **🗑️ Bulk Archive** expander: multiselect any visible applicants and archive them in one click
@@ -217,16 +219,19 @@ create table if not exists applicants (
     phone             text,
     profile_url       text,
     application_text  text,
-    score             int,           -- 1–4 stars; 0 = auto-disqualified
-    auto_disqualified    boolean default false,
-    reasoning            text,
-    score_model          text,
-    sms_sid              text,
-    trigger_subject      text,
-    one_hr_invited       boolean default false,
+    score                 int,           -- 1–4 stars; 0 = auto-disqualified
+    auto_disqualified     boolean default false,
+    reasoning             text,
+    score_model           text,
+    sms_sid               text,
+    trigger_subject       text,
+    manually_invited      boolean default false,
+    invite_sent_at        timestamptz,
+    calendly_booked       boolean default false,
+    one_hr_invited        boolean default false,
     one_hr_invite_sent_at timestamptz,
-    followup_sent_at     timestamptz,
-    archived             boolean default false
+    followup_sent_at      timestamptz,
+    archived              boolean default false
 );
 ```
 
@@ -312,6 +317,9 @@ To update secrets: `gh secret set SECRET_NAME --body "value" --repo funkiedunkie
 ```bash
 # One-shot run (processes any unread trigger emails right now)
 python main.py
+
+# Run follow-ups + auto-archive manually
+python follow_up.py
 
 # Install dependencies (first time)
 pip install -r requirements.txt
