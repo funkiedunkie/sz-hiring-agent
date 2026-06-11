@@ -28,6 +28,9 @@ sync/email_sync.py  (cron / dashboard button)
 follow_up.py  (cron, runs after main.py)
   └─▶ notifications/follow_up.py → send follow-up to non-responders after 2 business days
 
+schedule_interviews.py  (cron, runs after follow_up.py)
+  └─▶ notifications/scheduling.py → parse availability replies → ClubReady booking → confirm or fallback
+
 dashboard.py (Streamlit)
   └─▶ per-applicant conversation thread (SMS + email interleaved) + reply controls
 ```
@@ -49,6 +52,10 @@ dashboard.py (Streamlit)
 | `main.py` | Orchestrates the full pipeline |
 | `follow_up.py` | Cron entry point: sends follow-ups to non-responders (calls `notifications/follow_up.py`) |
 | `notifications/follow_up.py` | Follow-up logic: 2-business-day window, preferred-channel routing, dedup via `followup_sent_at` |
+| `schedule_interviews.py` | Cron entry point: processes availability replies and books ClubReady slots |
+| `scrapers/clubready.py` | Playwright: `block_time(date_str, time_str, name, phone, email)` blocks 30-min slot in ClubReady (blue, detail note) |
+| `agents/availability_parser.py` | Claude parser: `parse_availability(reply_text)` → `[{date, time}]` |
+| `notifications/scheduling.py` | Availability request + ClubReady booking pipeline; `send_availability_request()` + `process_scheduling_replies()` |
 | `backfill.py` | One-shot backfill: scrapes all CareerPlug apps, skips ones already in Supabase, runs full pipeline for new ones |
 | `dashboard.py` | Streamlit dashboard: applicant cards + per-applicant SMS/email conversation thread + reply UI |
 | `supabase/functions/calendly-webhook/index.ts` | Edge Function: marks applicant as booked on Calendly `invitee.created` |
@@ -102,7 +109,8 @@ Streamlit app. Run with `streamlit run dashboard.py`.
 - **Reply** section has two tabs — ordered by preferred channel — each with a compose area and Send button
 - Outbound messages sent from the dashboard are logged to the `messages` table immediately
 - Inbound SMS arrives in real-time via the `twilio-webhook` Edge Function; email replies arrive on next sync
-- **Advance to 1-Hr Interview** button: reveals a form defaulting to the candidate's preferred channel (with opt-in checkbox for the other channel); pre-filled with the 1-hr Calendly link (`CALENDLY_LINK_1HR`); logs to `messages` and sets `one_hr_invited = true`
+- **Advance to 1-Hr Interview** button: reveals a form defaulting to the candidate's preferred channel (with opt-in checkbox for the other channel); pre-filled with Option D availability request ("share a couple days and times"); logs to `messages`, sets `one_hr_invited = true`, and sets `scheduling_requested_at = now` so the scheduling cron knows to watch for replies
+- Cards show `✅` when `scheduled_block_at` is set (ClubReady block confirmed) and `📨` when `scheduling_fallback_sent_at` is set (fallback email sent to Boise staff)
 - **Archive / Unarchive** button per card: soft-deletes the applicant (`archived = true`); archived applicants are hidden by default and skipped by sync
 - **Show archived** toggle in the header: reveals archived applicants; shows Unarchive button instead of Archive
 - **🗑️ Bulk Archive** expander: multiselect any visible applicants and archive them in one click
@@ -158,6 +166,39 @@ supabase secrets set CALENDLY_WEBHOOK_SIGNING_KEY=<from Calendly developer setti
 
 **Matching logic:** invitee email → `applicants.email`. If no row matches, returns 200 (no retry).
 
+## ClubReady scheduling automation — `scrapers/clubready.py`
+
+Playwright automation that books a 30-minute block on the practitioner grid.
+
+**Login URL:** `https://stretchzone.clubready.com/` (select Boise location)
+**Grid URL:** `https://app.clubready.com/admin/schedulinggridviewall.asp`
+
+**Grid cells:** each available slot is `onclick="selectfree(date, time, staffId, staffId)"`.  
+Use `updategrid(dateStr)` (JS) to jump to a date. Cells exist in 5-min increments; `block_time` picks the first cell matching the requested on-the-hour/half-hour time (any practitioner).
+
+**Block-out form fields** (after clicking "Block Out Some Time"):
+- `#startHour`, `#startMinute`, `#startPeriod` — pre-filled from cell click
+- `#endHour`, `#endMinute`, `#endPeriod` — set to start + 30 min
+- `choosecolor(4)` — blue (colors: 0=white, 1=red, 2=purple, 3=yellow, 4=blue, 5=green)
+- `#comm` (textarea) — `"Prospective Practitioner- {name}, {phone}, {email}"`
+- `#make-unavailable-btn` — submit
+
+**`block_time(date_str, time_str, candidate_name, phone, email)`** — returns True on success.
+
+### Scheduling pipeline — `notifications/scheduling.py`
+
+1. **`send_availability_request(applicant)`** — sends Option D message (ask for times), sets `scheduling_requested_at`
+2. **`process_scheduling_replies()`** — cron target:
+   - Queries candidates with `scheduling_requested_at` set, no booking or fallback yet
+   - Reads their most recent inbound message after `scheduling_requested_at`
+   - Claude parses the reply → `[{date, time}]`
+   - Tries `block_time` for each slot; on first success: confirms to candidate, sets `scheduled_block_at + calendly_booked = true`
+   - If no slot matches: emails `boise@stretchzone.com` ("Prospective Practitioner — {name}"), sets `scheduling_fallback_sent_at`
+
+**Confirmation SMS:** "Great news — you're all set for {day}, {date} at {time}. Looking forward to seeing you! — Duncan"  
+**Fallback subject:** "Prospective Practitioner — {name}"  
+**Fallback body:** "Howdy. Could you please reach out to {name}...I wasn't able to find a time that worked for them."
+
 ## Scoring rubric (claude-sonnet-4-20250514)
 
 | Stars | Criteria |
@@ -201,6 +242,11 @@ CALENDLY_LINK                  # 15-min virtual interview link
 CALENDLY_LINK_1HR              # 1-hour in-person interview link (default: https://calendly.com/duncan-bodiesinmotionidaho/interview)
 CALENDLY_WEBHOOK_SIGNING_KEY   # from Calendly Developer → Webhooks → Signing Key (used by Edge Function)
 
+# ClubReady (scheduling automation)
+CLUBREADY_USERNAME             # ClubReady login username
+CLUBREADY_PASSWORD             # ClubReady login password
+CLUBREADY_FALLBACK_EMAIL       # default: boise@stretchzone.com
+
 # Optional
 EMAIL_TRIGGER_SUBJECT          # default: "New Application"
 SCORE_NOTIFY_THRESHOLD         # default: 2  (1–4 star scale)
@@ -230,8 +276,11 @@ create table if not exists applicants (
     calendly_booked       boolean default false,
     one_hr_invited        boolean default false,
     one_hr_invite_sent_at timestamptz,
-    followup_sent_at      timestamptz,
-    archived              boolean default false
+    followup_sent_at          timestamptz,
+    scheduling_requested_at   timestamptz,   -- when availability request was sent
+    scheduled_block_at        timestamptz,   -- when ClubReady block was successfully booked
+    scheduling_fallback_sent_at timestamptz, -- when fallback email was sent to Boise staff
+    archived                  boolean default false
 );
 ```
 
@@ -291,7 +340,7 @@ Runs automatically via `follow_up.py` after `main.py` on every cron tick.
 - **Most recent message is inbound** → clock paused (GREEN); ball is in our court
 - **No messages, was invited** → clock from `invite_sent_at`
 - **DQ'd (no messages ever sent)** → clock from `created_at`
-- **`calendly_booked = true`** → always GREEN regardless of messages
+- **`calendly_booked = true` or `scheduled_block_at` is set** → always GREEN regardless of messages
 
 A colored bar renders above each card in the dashboard. The expander label also shows `· Day N` when N > 0.
 
@@ -320,6 +369,9 @@ python main.py
 
 # Run follow-ups + auto-archive manually
 python follow_up.py
+
+# Process availability replies + book ClubReady slots manually
+python schedule_interviews.py
 
 # Install dependencies (first time)
 pip install -r requirements.txt

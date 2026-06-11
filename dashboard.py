@@ -32,6 +32,7 @@ def _s(val) -> str:
 from db.messages_logger import get_messages_for_applicant, insert_message
 from notifications.sms_sender import send_interview_invite, send_sms
 from notifications.email_sender import send_outreach_email, send_email
+from notifications.scheduling import send_availability_request
 from sync.sms_sync import sync_all as sync_sms
 from sync.email_sync import sync_all as sync_email
 from scrapers.careerplug import deactivate_applicant, DEACTIVATE_REASONS
@@ -50,7 +51,8 @@ def load(show_archived: bool = False) -> pd.DataFrame:
     df = pd.DataFrame(resp.data)
     df["created_at"] = pd.to_datetime(df["created_at"], utc=True).dt.tz_convert("US/Mountain")
     for col in ["score", "auto_disqualified", "manually_invited", "calendly_booked", "sms_sid", "invite_sent_at",
-                "one_hr_invited", "one_hr_invite_sent_at", "archived"]:
+                "one_hr_invited", "one_hr_invite_sent_at", "archived",
+                "scheduling_requested_at", "scheduled_block_at", "scheduling_fallback_sent_at"]:
         if col not in df.columns:
             df[col] = None
     return df
@@ -99,7 +101,8 @@ def do_deactivate(row_id: str, profile_url: str, reason: str) -> bool:
 def do_mark_booked(row_id: str):
     db.table("applicants").update({"calendly_booked": True}).eq("id", row_id).execute()
 
-def do_1hr_invite(row_id: str, phone: str, email: str, sms_body: str, email_body: str) -> int:
+def do_1hr_invite(row_id: str, phone: str, email: str, sms_body: str, email_body: str,
+                   pref_ch: str | None = None) -> int:
     from notifications.sms_sender import send_sms
     from notifications.email_sender import send_email
     from db.messages_logger import insert_message as _ins
@@ -112,16 +115,17 @@ def do_1hr_invite(row_id: str, phone: str, email: str, sms_body: str, email_body
                  body=sms_body.strip(), external_id=sid, sent_at=now)
             sent += 1
     if email and email_body.strip():
-        email_id = send_email(email, "1-Hour Interview — Stretch Zone", email_body.strip())
+        email_id = send_email(email, "Scheduling your stretch — Stretch Zone", email_body.strip())
         if email_id:
             _ins(applicant_id=row_id, channel="email", direction="outbound",
-                 body=email_body.strip(), subject="1-Hour Interview — Stretch Zone",
+                 body=email_body.strip(), subject="Scheduling your stretch — Stretch Zone",
                  external_id=email_id, sent_at=now)
             sent += 1
     if sent:
         db.table("applicants").update({
             "one_hr_invited": True,
             "one_hr_invite_sent_at": now,
+            "scheduling_requested_at": now,
         }).eq("id", row_id).execute()
     return sent
 
@@ -230,7 +234,7 @@ def _business_days_since(ts_str) -> int:
 
 def _staleness_days(applicant: dict, messages: list) -> int:
     """Business days the ball has been in the candidate's court (0 = green)."""
-    if applicant.get("calendly_booked"):
+    if applicant.get("calendly_booked") or applicant.get("scheduled_block_at"):
         return 0
     if messages:
         most_recent = messages[-1]  # sorted oldest-first by get_messages_for_applicant
@@ -394,12 +398,14 @@ def render(subset: pd.DataFrame, tab: str = ""):
         is_invited    = bool(r.get("sms_sid") or "") or bool(r.get("manually_invited"))
         is_booked     = bool(r.get("calendly_booked"))
         is_1hr        = bool(r.get("one_hr_invited"))
+        is_cr_booked  = bool(r.get("scheduled_block_at"))
 
         star_str = ("AUTO-DQ" if is_dq else "⭐" * score)
         label    = f"{star_str}  {r['name']}  —  {r.get('job_title', '')}"
-        if is_invited: label += "  ✉️"
-        if is_1hr:     label += "  🎯"
-        if is_booked:  label += "  📅"
+        if is_invited:  label += "  ✉️"
+        if is_1hr:      label += "  🎯"
+        if is_booked:   label += "  📅"
+        if is_cr_booked: label += "  ✅"
 
         messages = get_messages_for_applicant(str(r["id"]))
         pref_ch = _preferred_channel_from_messages(messages)
@@ -474,14 +480,16 @@ def render(subset: pd.DataFrame, tab: str = ""):
                     if st.session_state.get(f"show_1hr_{r['id']}"):
                         first_name = str(r["name"]).split()[0]
                         default_sms = (
-                            f"Hi {first_name}, I'd love to have you in for a 1-hour interview! "
-                            f"Here's a link to grab a time: {config.CALENDLY_LINK_1HR}"
+                            "Thanks for taking the time to meet with me. To get you scheduled, "
+                            "could you share a couple days and times that work for you? "
+                            "Mon-Fri mornings or afternoons work best. Thanks, Duncan"
                         )
                         default_email = (
-                            f"{first_name}, thank you for the initial conversation — "
-                            f"I'd like to move forward with a 1-hour in-person interview.\n\n"
-                            f"You can book a time here: {config.CALENDLY_LINK_1HR}\n\n"
-                            f"Thanks,\nDuncan Richardson"
+                            f"{first_name}, thanks for taking the time to meet with me.\n\n"
+                            "To get you scheduled for a stretch, would you mind sharing some times "
+                            "that work for you? We have morning and afternoon openings Monday through "
+                            "Friday. Two or three options works great — I can usually find something "
+                            "that lines up.\n\nThanks,\nDuncan Richardson"
                         )
                         if pref_ch == "sms":
                             st.caption("📱 Sending via preferred channel (SMS)")
@@ -528,10 +536,11 @@ def render(subset: pd.DataFrame, tab: str = ""):
                             if st.button(btn_label, key=f"1hr_send_{tab}_{r['id']}", type="primary"):
                                 with st.spinner("Sending..."):
                                     sent_count = do_1hr_invite(r["id"], _s(r.get("phone")),
-                                                               _s(r.get("email")), sms_msg, email_msg)
+                                                               _s(r.get("email")), sms_msg, email_msg,
+                                                               pref_ch=pref_ch)
                                 st.session_state.pop(f"show_1hr_{r['id']}", None)
                                 if sent_count:
-                                    st.success(f"1-hr invite sent ({sent_count} channel{'s' if sent_count > 1 else ''})!")
+                                    st.success(f"Availability request sent ({sent_count} channel{'s' if sent_count > 1 else ''})!")
                                 else:
                                     st.error("Nothing sent — no valid contact info.")
                                 st.rerun()
@@ -540,7 +549,12 @@ def render(subset: pd.DataFrame, tab: str = ""):
                                 st.session_state.pop(f"show_1hr_{r['id']}", None)
                                 st.rerun()
                 else:
-                    st.success("🎯 1-Hr Invited")
+                    if is_cr_booked:
+                        st.success("✅ ClubReady Booked")
+                    elif r.get("scheduling_fallback_sent_at"):
+                        st.warning("📨 Fallback sent")
+                    else:
+                        st.success("🎯 Scheduling requested")
                     sent_1hr = fmt_dt(r.get("one_hr_invite_sent_at"))
                     if sent_1hr:
                         st.caption(sent_1hr)

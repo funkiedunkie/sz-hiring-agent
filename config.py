@@ -25,3 +25,8 @@ EMAIL_TRIGGER_SUBJECT = os.getenv("EMAIL_TRIGGER_SUBJECT", "New Application")
 CALENDLY_LINK = _require("CALENDLY_LINK")
 CALENDLY_LINK_1HR = os.getenv("CALENDLY_LINK_1HR", "https://calendly.com/duncan-bodiesinmotionidaho/interview")
 SCORE_NOTIFY_THRESHOLD = int(os.getenv("SCORE_NOTIFY_THRESHOLD", "2"))  # 1–4 star scale
+
+# ClubReady (optional — only needed for scheduling automation)
+CLUBREADY_USERNAME = os.getenv("CLUBREADY_USERNAME", "")
+CLUBREADY_PASSWORD = os.getenv("CLUBREADY_PASSWORD", "")
+CLUBREADY_FALLBACK_EMAIL = os.getenv("CLUBREADY_FALLBACK_EMAIL", "boise@stretchzone.com")
