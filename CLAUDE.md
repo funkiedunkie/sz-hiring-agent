@@ -45,7 +45,7 @@ dashboard.py (Streamlit)
 | `agents/resume_scorer.py` | Claude `claude-sonnet-4-20250514` scorer |
 | `db/supabase_logger.py` | Insert applicant rows into Supabase |
 | `db/messages_logger.py` | Insert / fetch rows from the `messages` table |
-| `notifications/sms_sender.py` | Twilio SMS: `send_interview_invite()` (templated) + `send_sms(phone, body)` (custom) → returns SID |
+| `notifications/sms_sender.py` | Twilio SMS: `send_interview_invite()` (templated) + `send_sms(phone, body)` (custom) → returns SID; routes via `messaging_service_sid` when `TWILIO_MESSAGING_SERVICE_SID` is set (A2P 10DLC compliant), falls back to `from_=TWILIO_FROM_NUMBER` |
 | `notifications/email_sender.py` | Graph API email: `send_outreach_email()` (auto-pipeline, returns bool) + `send_email(to, subject, body)` (dashboard, draft→send, returns Graph message ID for dedup) |
 | `sync/sms_sync.py` | Backfill Twilio inbound+outbound SMS into `messages` for all known applicants |
 | `sync/email_sync.py` | Backfill Graph inbox+sentitems emails into `messages` for all known applicants |
@@ -226,6 +226,7 @@ CAREERPLUG_COMPANY_SLUG       # appears in CareerPlug URLs
 TWILIO_ACCOUNT_SID
 TWILIO_AUTH_TOKEN
 TWILIO_FROM_NUMBER             # E.164, e.g. +12085550000
+TWILIO_MESSAGING_SERVICE_SID  # A2P 10DLC compliant routing; when set, all SMS routes through this service instead of from_ number
 
 # Supabase
 SUPABASE_URL
