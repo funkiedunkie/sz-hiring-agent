@@ -33,3 +33,6 @@ CLUBREADY_FALLBACK_EMAIL = os.getenv("CLUBREADY_FALLBACK_EMAIL", "boise@stretchz
 
 # Manager notifications (optional — Duncan's phone for reply alerts)
 MANAGER_PHONE = os.getenv("MANAGER_PHONE", "")
+
+# Twilio Messaging Service (A2P 10DLC compliant routing; optional fallback to FROM number)
+TWILIO_MESSAGING_SERVICE_SID = os.getenv("TWILIO_MESSAGING_SERVICE_SID", "")
