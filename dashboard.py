@@ -10,13 +10,21 @@ import config
 from db.supabase_logger import _client as db
 
 @st.cache_resource(show_spinner="Installing browser…")
-def _ensure_playwright_browser():
+def _ensure_playwright_browser(_version: str = ""):
     subprocess.run(
         [sys.executable, "-m", "playwright", "install", "chromium"],
         check=True, capture_output=True,
     )
 
-_ensure_playwright_browser()
+# Pass the installed Playwright version so any upgrade invalidates the cache
+# and re-installs the correct chromium + chromium_headless_shell revision.
+try:
+    import importlib.metadata
+    _pw_version = importlib.metadata.version("playwright")
+except Exception:
+    _pw_version = ""
+
+_ensure_playwright_browser(_pw_version)
 
 def _strip_html(text: str) -> str:
     """Remove HTML tags and collapse whitespace for display."""

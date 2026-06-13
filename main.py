@@ -7,7 +7,10 @@ import sys
 
 import config
 from agents.resume_scorer import score_candidate
-from db.supabase_logger import log_applicant, check_applicant_exists
+from db.supabase_logger import (
+    log_applicant, check_applicant_exists,
+    get_applicant_by_url, update_contact_info, set_invite_sent,
+)
 from notifications.email_sender import send_outreach_email
 from notifications.sms_sender import send_interview_invite
 from scrapers.careerplug import scrape_application, scrape_application_by_name
@@ -52,7 +55,16 @@ def process_applicant(name_or_url: str, dry_run: bool, trigger_subject: str = ""
 
     sms_sid = ""
     if not result.auto_disqualified and result.score >= config.SCORE_NOTIFY_THRESHOLD:
-        if dry_run:
+        if not applicant.email and not applicant.phone:
+            logger.warning("Qualifying candidate %s has no contact info — alerting manager", applicant.name)
+            if config.MANAGER_PHONE:
+                from notifications.sms_sender import send_sms
+                send_sms(
+                    config.MANAGER_PHONE,
+                    f"Hi Duncan — {applicant.name} scored {result.score}★ but I couldn't scrape their contact info from CareerPlug. "
+                    f"Please add it manually or run: python main.py --repatch --url {applicant.profile_url} — SZ Agent",
+                )
+        elif dry_run:
             logger.info("[DRY RUN] Would send SMS + email to %s (%s / %s)",
                         applicant.name, applicant.phone, applicant.email)
         else:
@@ -80,6 +92,40 @@ def process_applicant(name_or_url: str, dry_run: bool, trigger_subject: str = ""
             sms_sid=sms_sid,
             trigger_subject=trigger_subject,
         )
+
+
+def repatch(url: str) -> None:
+    """Re-scrape *url*, update email/phone in Supabase, and send invite if not already sent."""
+    try:
+        applicant = scrape_application(url, headless=True)
+    except Exception as exc:
+        logger.error("Re-scrape failed for %r: %s", url, exc)
+        return
+
+    logger.info("Re-scraped: %s | email=%r | phone=%r", applicant.name, applicant.email, applicant.phone)
+
+    if not applicant.email and not applicant.phone:
+        logger.error("Re-scrape still returned no contact info for %s — check CareerPlug manually", applicant.name)
+        return
+
+    existing = get_applicant_by_url(url)
+    if not existing:
+        logger.error("No existing record for %s — run without --repatch to insert", url)
+        return
+
+    update_contact_info(url, email=applicant.email, phone=applicant.phone)
+
+    if (
+        not existing.get("invite_sent_at")
+        and not existing.get("auto_disqualified")
+        and (existing.get("score") or 0) >= config.SCORE_NOTIFY_THRESHOLD
+    ):
+        logger.info("Sending invite to %s", applicant.name)
+        sms_sid = send_interview_invite(candidate_name=applicant.name, candidate_phone=applicant.phone)
+        send_outreach_email(candidate_name=applicant.name, candidate_email=applicant.email)
+        set_invite_sent(url, sms_sid)
+    else:
+        logger.info("Invite already sent or candidate doesn't qualify — skipping outreach")
 
 
 def run(dry_run: bool = False, direct_url: str = "") -> None:
@@ -124,5 +170,12 @@ if __name__ == "__main__":
                         help="Scrape and score but skip SMS, email, and Supabase writes")
     parser.add_argument("--url", default="",
                         help="Process a single CareerPlug app URL directly (bypasses email trigger)")
+    parser.add_argument("--repatch", action="store_true",
+                        help="Re-scrape --url, update email/phone, and send invite if not already sent")
     args = parser.parse_args()
-    run(dry_run=args.dry_run, direct_url=args.url)
+    if args.repatch:
+        if not args.url:
+            parser.error("--repatch requires --url")
+        repatch(args.url)
+    else:
+        run(dry_run=args.dry_run, direct_url=args.url)

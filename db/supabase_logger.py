@@ -40,6 +40,28 @@ def check_applicant_exists(profile_url: str) -> bool:
     return len(resp.data) > 0
 
 
+def get_applicant_by_url(profile_url: str) -> dict[str, Any] | None:
+    """Return the applicant row for *profile_url*, or None if not found."""
+    resp = _client.table(TABLE).select("*").eq("profile_url", profile_url).execute()
+    return resp.data[0] if resp.data else None
+
+
+def update_contact_info(profile_url: str, email: str, phone: str) -> None:
+    """Patch email and phone on an existing applicant row."""
+    _client.table(TABLE).update({"email": email, "phone": phone}).eq("profile_url", profile_url).execute()
+    logger.info("Patched contact info for %s — email=%s phone=%s", profile_url, email, phone)
+
+
+def set_invite_sent(profile_url: str, sms_sid: str) -> None:
+    """Mark invite as sent (invite_sent_at = now, sms_sid) on an existing row."""
+    from datetime import datetime, timezone
+    _client.table(TABLE).update({
+        "sms_sid": sms_sid,
+        "invite_sent_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("profile_url", profile_url).execute()
+    logger.info("Marked invite sent for %s sms_sid=%s", profile_url, sms_sid)
+
+
 def log_applicant(
     name: str,
     email: str,
