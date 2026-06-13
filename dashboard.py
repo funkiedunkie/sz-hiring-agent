@@ -1,4 +1,6 @@
 """Stretch Zone — Hiring Dashboard"""
+import subprocess
+import sys
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timezone, timedelta
@@ -6,6 +8,15 @@ from datetime import datetime, timezone, timedelta
 import re
 import config
 from db.supabase_logger import _client as db
+
+@st.cache_resource(show_spinner="Installing browser…")
+def _ensure_playwright_browser():
+    subprocess.run(
+        [sys.executable, "-m", "playwright", "install", "chromium"],
+        check=True, capture_output=True,
+    )
+
+_ensure_playwright_browser()
 
 def _strip_html(text: str) -> str:
     """Remove HTML tags and collapse whitespace for display."""
