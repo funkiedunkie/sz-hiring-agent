@@ -54,6 +54,7 @@ def process_applicant(name_or_url: str, dry_run: bool, trigger_subject: str = ""
     logger.info("Score: %s | auto_dq: %s | %s", stars, result.auto_disqualified, result.reasoning[:120])
 
     sms_sid = ""
+    invite_sent = False
     if not result.auto_disqualified and result.score >= config.SCORE_NOTIFY_THRESHOLD:
         if not applicant.email and not applicant.phone:
             logger.warning("Qualifying candidate %s has no contact info — alerting manager", applicant.name)
@@ -71,6 +72,7 @@ def process_applicant(name_or_url: str, dry_run: bool, trigger_subject: str = ""
             logger.info("%s scored %d stars -- sending outreach", applicant.name, result.score)
             sms_sid = send_interview_invite(candidate_name=applicant.name, candidate_phone=applicant.phone)
             send_outreach_email(candidate_name=applicant.name, candidate_email=applicant.email)
+            invite_sent = True
     else:
         reason = "auto-disqualified" if result.auto_disqualified else "score %d < threshold %d" % (result.score, config.SCORE_NOTIFY_THRESHOLD)
         logger.info("Skipping outreach for %s (%s)", applicant.name, reason)
@@ -91,6 +93,7 @@ def process_applicant(name_or_url: str, dry_run: bool, trigger_subject: str = ""
             score_model=result.model,
             sms_sid=sms_sid,
             trigger_subject=trigger_subject,
+            invite_sent=invite_sent,
         )
 
 

@@ -74,8 +74,10 @@ def log_applicant(
     score_model: str,
     sms_sid: str = "",
     trigger_subject: str = "",
+    invite_sent: bool = False,
 ) -> dict[str, Any]:
     """Insert a new applicant row and return the inserted record."""
+    from datetime import datetime, timezone
     record = {
         "name": name,
         "email": email,
@@ -89,6 +91,8 @@ def log_applicant(
         "sms_sid": sms_sid,
         "trigger_subject": trigger_subject,
     }
+    if invite_sent:
+        record["invite_sent_at"] = datetime.now(timezone.utc).isoformat()
 
     response = _client.table(TABLE).insert(record).execute()
 
