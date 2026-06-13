@@ -526,10 +526,10 @@ def render(subset: pd.DataFrame, tab: str = ""):
                         )
                         default_email = (
                             f"{first_name}, thanks for taking the time to meet with me.\n\n"
-                            "To get you scheduled for a stretch, would you mind sharing some times "
-                            "that work for you? We have morning and afternoon openings Monday through "
-                            "Friday. Two or three options works great — I can usually find something "
-                            "that lines up.\n\nThanks,\nDuncan Richardson"
+                            "To get you scheduled for your in-person interview, would you mind sharing "
+                            "some times that work for you? We have morning and afternoon openings Monday "
+                            "through Friday. Two or three options works great — I can usually find "
+                            "something that lines up.\n\nThanks,\nDuncan Richardson"
                         )
                         if pref_ch == "sms":
                             st.caption("📱 Sending via preferred channel (SMS)")
