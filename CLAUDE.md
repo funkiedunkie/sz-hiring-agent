@@ -386,6 +386,13 @@ The agent runs autonomously via `.github/workflows/hiring-agent.yml` on a cron s
 
 To update secrets: `gh secret set SECRET_NAME --body "value" --repo funkiedunkie/sz-hiring-agent`
 
+## Dashboard — Streamlit Cloud deployment
+
+The dashboard (`dashboard.py`) is deployed on Streamlit Cloud.
+
+- **`packages.txt`** — lists apt packages Streamlit Cloud installs at build time (Chromium system-level deps: NSS, ATK, DRM, etc.) so Playwright's headless shell can run
+- **Browser install at startup** — `dashboard.py` calls `playwright install chromium` once via a `@st.cache_resource` function on first container start; cached so it doesn't re-run on every page refresh; re-runs automatically when Streamlit Cloud spins up a fresh container
+
 ## Running locally
 
 ```bash
