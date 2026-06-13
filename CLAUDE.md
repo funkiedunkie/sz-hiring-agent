@@ -399,6 +399,12 @@ The dashboard (`dashboard.py`) is deployed on Streamlit Cloud.
 # One-shot run (processes any unread trigger emails right now)
 python main.py
 
+# Process a single applicant by URL directly (bypasses email trigger)
+python main.py --url https://app.careerplug.com/manage/apps/<id>
+
+# Re-scrape an existing applicant to patch missing email/phone, then send invite if not yet sent
+python main.py --repatch --url https://app.careerplug.com/manage/apps/<id>
+
 # Run follow-ups + auto-archive manually
 python follow_up.py
 
