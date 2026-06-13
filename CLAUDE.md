@@ -109,7 +109,8 @@ Streamlit app. Run with `streamlit run dashboard.py`.
 - **Reply** section has two tabs — ordered by preferred channel — each with a compose area and Send button
 - Outbound messages sent from the dashboard are logged to the `messages` table immediately
 - Inbound SMS arrives in real-time via the `twilio-webhook` Edge Function; email replies arrive on next sync
-- **Advance to 1-Hr Interview** button: reveals a form defaulting to the candidate's preferred channel (with opt-in checkbox for the other channel); pre-filled with Option D availability request ("share a couple days and times"); logs to `messages`, sets `one_hr_invited = true`, and sets `scheduling_requested_at = now` so the scheduling cron knows to watch for replies
+- **📍 Schedule Stretch** button: appears before `scheduling_requested_at` is set; reveals a form pre-filled with Option D availability request ("share a couple days and times"); logs to `messages`, sets `scheduling_requested_at = now` so the scheduling cron watches for replies; does NOT set `one_hr_invited`
+- **🎯 Advance to 1-Hr Interview** button: appears after `scheduled_block_at` is set (stretch confirmed) and `one_hr_invited = false`; sends `CALENDLY_LINK_1HR` via candidate's preferred channel; sets `one_hr_invited = true` and `one_hr_invite_sent_at = now`
 - Cards show `✅` when `scheduled_block_at` is set (ClubReady block confirmed) and `📨` when `scheduling_fallback_sent_at` is set (fallback email sent to Boise staff)
 - **Archive / Unarchive** button per card: soft-deletes the applicant (`archived = true`); archived applicants are hidden by default and skipped by sync
 - **Show archived** toggle in the header: reveals archived applicants; shows Unarchive button instead of Archive
