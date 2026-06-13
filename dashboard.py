@@ -127,8 +127,8 @@ def do_deactivate(row_id: str, profile_url: str, reason: str) -> tuple[bool, str
 def do_mark_booked(row_id: str):
     db.table("applicants").update({"calendly_booked": True}).eq("id", row_id).execute()
 
-def do_1hr_invite(row_id: str, phone: str, email: str, sms_body: str, email_body: str,
-                   pref_ch: str | None = None) -> int:
+def do_schedule_stretch(row_id: str, phone: str, email: str, sms_body: str, email_body: str,
+                        pref_ch: str | None = None) -> int:
     from notifications.sms_sender import send_sms
     from notifications.email_sender import send_email
     from db.messages_logger import insert_message as _ins
@@ -149,9 +149,37 @@ def do_1hr_invite(row_id: str, phone: str, email: str, sms_body: str, email_body
             sent += 1
     if sent:
         db.table("applicants").update({
+            "scheduling_requested_at": now,
+        }).eq("id", row_id).execute()
+    return sent
+
+
+def do_1hr_interview(row_id: str, phone: str, email: str, pref_ch: str | None = None) -> int:
+    from notifications.sms_sender import send_sms
+    from notifications.email_sender import send_email
+    from db.messages_logger import insert_message as _ins
+    now = datetime.now(timezone.utc).isoformat()
+    link = config.CALENDLY_LINK_1HR
+    sent = 0
+    if phone and pref_ch != "email":
+        body = f"Great news — I'd love to have you come in for a 1-hour interview! Grab a time here: {link} — Duncan"
+        sid = send_sms(phone, body)
+        if sid:
+            _ins(applicant_id=row_id, channel="sms", direction="outbound",
+                 body=body, external_id=sid, sent_at=now)
+            sent += 1
+    if email:
+        subj = "1-hour interview — Stretch Zone"
+        body_email = f"Grab a time for your 1-hour interview here: {link}\n\nThanks,\nDuncan Richardson"
+        email_id = send_email(email, subj, body_email)
+        if email_id:
+            _ins(applicant_id=row_id, channel="email", direction="outbound",
+                 body=body_email, subject=subj, external_id=email_id, sent_at=now)
+            sent += 1
+    if sent:
+        db.table("applicants").update({
             "one_hr_invited": True,
             "one_hr_invite_sent_at": now,
-            "scheduling_requested_at": now,
         }).eq("id", row_id).execute()
     return sent
 
@@ -510,12 +538,13 @@ def render(subset: pd.DataFrame, tab: str = ""):
 
                 st.write("")
 
-                if not is_1hr:
-                    _missing_1hr = [c for c, v in [("phone", _s(r.get("phone"))), ("email", _s(r.get("email")))] if not v]
-                    if _missing_1hr:
-                        st.warning(f"Missing contact info: {', '.join(_missing_1hr)}")
-                    if st.button("🎯 Advance to 1-Hr Interview", key=f"1hr_btn_{tab}_{r['id']}",
-                                 disabled=bool(_missing_1hr)):
+                if not r.get("scheduling_requested_at"):
+                    # Step 2: ask candidate to come in for a stretch
+                    _missing_str = [c for c, v in [("phone", _s(r.get("phone"))), ("email", _s(r.get("email")))] if not v]
+                    if _missing_str:
+                        st.warning(f"Missing contact info: {', '.join(_missing_str)}")
+                    if st.button("📍 Schedule Stretch", key=f"1hr_btn_{tab}_{r['id']}",
+                                 disabled=bool(_missing_str)):
                         st.session_state[f"show_1hr_{r['id']}"] = True
                     if st.session_state.get(f"show_1hr_{r['id']}"):
                         first_name = str(r["name"]).split()[0]
@@ -526,10 +555,10 @@ def render(subset: pd.DataFrame, tab: str = ""):
                         )
                         default_email = (
                             f"{first_name}, thanks for taking the time to meet with me.\n\n"
-                            "To get you scheduled for your in-person interview, would you mind sharing "
-                            "some times that work for you? We have morning and afternoon openings Monday "
-                            "through Friday. Two or three options works great — I can usually find "
-                            "something that lines up.\n\nThanks,\nDuncan Richardson"
+                            "To get you scheduled for a stretch, would you mind sharing some times "
+                            "that work for you? We have morning and afternoon openings Monday through "
+                            "Friday. Two or three options works great — I can usually find something "
+                            "that lines up.\n\nThanks,\nDuncan Richardson"
                         )
                         if pref_ch == "sms":
                             st.caption("📱 Sending via preferred channel (SMS)")
@@ -575,9 +604,9 @@ def render(subset: pd.DataFrame, tab: str = ""):
                         with c1:
                             if st.button(btn_label, key=f"1hr_send_{tab}_{r['id']}", type="primary"):
                                 with st.spinner("Sending..."):
-                                    sent_count = do_1hr_invite(r["id"], _s(r.get("phone")),
-                                                               _s(r.get("email")), sms_msg, email_msg,
-                                                               pref_ch=pref_ch)
+                                    sent_count = do_schedule_stretch(r["id"], _s(r.get("phone")),
+                                                                     _s(r.get("email")), sms_msg, email_msg,
+                                                                     pref_ch=pref_ch)
                                 st.session_state.pop(f"show_1hr_{r['id']}", None)
                                 if sent_count:
                                     st.success(f"Availability request sent ({sent_count} channel{'s' if sent_count > 1 else ''})!")
@@ -589,15 +618,34 @@ def render(subset: pd.DataFrame, tab: str = ""):
                                 st.session_state.pop(f"show_1hr_{r['id']}", None)
                                 st.rerun()
                 else:
+                    # Stretch scheduling is in progress or done
                     if is_cr_booked:
-                        st.success("✅ ClubReady Booked")
+                        st.success("✅ Stretch booked")
                     elif r.get("scheduling_fallback_sent_at"):
-                        st.warning("📨 Fallback sent")
+                        st.warning("📨 Scheduling fallback sent")
                     else:
-                        st.success("🎯 Scheduling requested")
-                    sent_1hr = fmt_dt(r.get("one_hr_invite_sent_at"))
-                    if sent_1hr:
-                        st.caption(sent_1hr)
+                        st.info("🕐 Waiting for stretch reply")
+
+                    st.write("")
+
+                    # Step 3: after stretch is confirmed, advance to 1-hr interview
+                    if is_cr_booked:
+                        if not is_1hr:
+                            if st.button("🎯 Advance to 1-Hr Interview", key=f"1hr_btn_{tab}_{r['id']}",
+                                         type="primary"):
+                                with st.spinner("Sending..."):
+                                    sent_count = do_1hr_interview(r["id"], _s(r.get("phone")),
+                                                                  _s(r.get("email")), pref_ch=pref_ch)
+                                if sent_count:
+                                    st.success("1-hr interview invite sent!")
+                                else:
+                                    st.error("Nothing sent — no valid contact info.")
+                                st.rerun()
+                        else:
+                            st.success("🎯 1-Hr interview invited")
+                            sent_1hr = fmt_dt(r.get("one_hr_invite_sent_at"))
+                            if sent_1hr:
+                                st.caption(sent_1hr)
 
                 st.write("")
                 if not r.get("archived"):
