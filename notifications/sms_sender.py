@@ -50,6 +50,9 @@ def send_sms(phone: str, body: str) -> str:
     Send a custom SMS to *phone*.
     Returns the Twilio message SID, or an empty string on failure.
     """
+    if not config.SMS_ENABLED:
+        logger.warning("SMS_ENABLED=false — skipping send_sms to %s", phone)
+        return ""
     if not phone:
         logger.warning("send_sms called with empty phone")
         return ""
@@ -69,6 +72,9 @@ def send_interview_invite(candidate_name: str, candidate_phone: str) -> str:
     Send the standard interview invite SMS to *candidate_phone*.
     Returns the Twilio message SID, or an empty string on failure.
     """
+    if not config.SMS_ENABLED:
+        logger.warning("SMS_ENABLED=false — skipping invite SMS for %s", candidate_name)
+        return ""
     if not candidate_phone:
         logger.warning("No phone number for '%s' — skipping SMS", candidate_name)
         return ""

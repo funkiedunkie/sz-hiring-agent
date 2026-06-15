@@ -36,3 +36,6 @@ MANAGER_PHONE = os.getenv("MANAGER_PHONE", "")
 
 # Twilio Messaging Service (A2P 10DLC compliant routing; optional fallback to FROM number)
 TWILIO_MESSAGING_SERVICE_SID = os.getenv("TWILIO_MESSAGING_SERVICE_SID", "")
+
+# Set to "false" to hard-disable all outbound SMS (account under review, etc.)
+SMS_ENABLED = os.getenv("SMS_ENABLED", "true").lower() not in ("false", "0", "no")
