@@ -110,7 +110,7 @@ Streamlit app. Run with `streamlit run dashboard.py`.
 - Outbound messages sent from the dashboard are logged to the `messages` table immediately
 - Inbound SMS arrives in real-time via the `twilio-webhook` Edge Function; email replies arrive on next sync
 - **📍 Schedule Stretch** button: appears before `scheduling_requested_at` is set; reveals a form pre-filled with Option D availability request ("share a couple days and times"); logs to `messages`, sets `scheduling_requested_at = now` so the scheduling cron watches for replies; does NOT set `one_hr_invited`
-- **🎯 Advance to 1-Hr Interview** button: appears after `scheduled_block_at` is set (stretch confirmed) and `one_hr_invited = false`; sends `CALENDLY_LINK_1HR` via candidate's preferred channel; sets `one_hr_invited = true` and `one_hr_invite_sent_at = now`
+- **🎯 Advance to 1-Hr Interview** button: always visible when `one_hr_invited = false` (not gated behind stretch completion); sends `CALENDLY_LINK_1HR` via candidate's preferred channel only (SMS if preferred or phone-only, email otherwise); sets `one_hr_invited = true` and `one_hr_invite_sent_at = now`
 - Cards show `✅` when `scheduled_block_at` is set (ClubReady block confirmed) and `📨` when `scheduling_fallback_sent_at` is set (fallback email sent to Boise staff)
 - **Archive / Unarchive** button per card: soft-deletes the applicant (`archived = true`); archived applicants are hidden by default and skipped by sync
 - **Show archived** toggle in the header: reveals archived applicants; shows Unarchive button instead of Archive
@@ -228,6 +228,7 @@ TWILIO_ACCOUNT_SID
 TWILIO_AUTH_TOKEN
 TWILIO_FROM_NUMBER             # E.164, e.g. +12085550000
 TWILIO_MESSAGING_SERVICE_SID  # A2P 10DLC compliant routing; when set, all SMS routes through this service instead of from_ number
+SMS_ENABLED                    # set to "false" to hard-disable all outbound SMS (e.g. while account is under review); default true
 
 # Supabase
 SUPABASE_URL
