@@ -161,21 +161,23 @@ def do_1hr_interview(row_id: str, phone: str, email: str, pref_ch: str | None = 
     now = datetime.now(timezone.utc).isoformat()
     link = config.CALENDLY_LINK_1HR
     sent = 0
-    if phone and pref_ch != "email":
+    use_sms = (pref_ch == "sms") or (pref_ch is None and phone and not email)
+    if use_sms and phone:
         body = f"Great news — I'd love to have you come in for a 1-hour interview! Grab a time here: {link} — Duncan"
         sid = send_sms(phone, body)
         if sid:
             _ins(applicant_id=row_id, channel="sms", direction="outbound",
                  body=body, external_id=sid, sent_at=now)
             sent += 1
-    if email:
-        subj = "1-hour interview — Stretch Zone"
-        body_email = f"Grab a time for your 1-hour interview here: {link}\n\nThanks,\nDuncan Richardson"
-        email_id = send_email(email, subj, body_email)
-        if email_id:
-            _ins(applicant_id=row_id, channel="email", direction="outbound",
-                 body=body_email, subject=subj, external_id=email_id, sent_at=now)
-            sent += 1
+    else:
+        if email:
+            subj = "1-hour interview — Stretch Zone"
+            body_email = f"Grab a time for your 1-hour interview here: {link}\n\nThanks,\nDuncan Richardson"
+            email_id = send_email(email, subj, body_email)
+            if email_id:
+                _ins(applicant_id=row_id, channel="email", direction="outbound",
+                     body=body_email, subject=subj, external_id=email_id, sent_at=now)
+                sent += 1
     if sent:
         db.table("applicants").update({
             "one_hr_invited": True,
@@ -626,26 +628,25 @@ def render(subset: pd.DataFrame, tab: str = ""):
                     else:
                         st.info("🕐 Waiting for stretch reply")
 
-                    st.write("")
+                st.write("")
 
-                    # Step 3: after stretch is confirmed, advance to 1-hr interview
-                    if is_cr_booked:
-                        if not is_1hr:
-                            if st.button("🎯 Advance to 1-Hr Interview", key=f"1hr_btn_{tab}_{r['id']}",
-                                         type="primary"):
-                                with st.spinner("Sending..."):
-                                    sent_count = do_1hr_interview(r["id"], _s(r.get("phone")),
-                                                                  _s(r.get("email")), pref_ch=pref_ch)
-                                if sent_count:
-                                    st.success("1-hr interview invite sent!")
-                                else:
-                                    st.error("Nothing sent — no valid contact info.")
-                                st.rerun()
+                # 1-hr interview — always available
+                if not is_1hr:
+                    if st.button("🎯 Advance to 1-Hr Interview", key=f"1hr_btn_{tab}_{r['id']}",
+                                 type="primary"):
+                        with st.spinner("Sending..."):
+                            sent_count = do_1hr_interview(r["id"], _s(r.get("phone")),
+                                                          _s(r.get("email")), pref_ch=pref_ch)
+                        if sent_count:
+                            st.success("1-hr interview invite sent!")
                         else:
-                            st.success("🎯 1-Hr interview invited")
-                            sent_1hr = fmt_dt(r.get("one_hr_invite_sent_at"))
-                            if sent_1hr:
-                                st.caption(sent_1hr)
+                            st.error("Nothing sent — no valid contact info.")
+                        st.rerun()
+                else:
+                    st.success("🎯 1-Hr interview invited")
+                    sent_1hr = fmt_dt(r.get("one_hr_invite_sent_at"))
+                    if sent_1hr:
+                        st.caption(sent_1hr)
 
                 st.write("")
                 if not r.get("archived"):
