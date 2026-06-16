@@ -632,7 +632,7 @@ def render(subset: pd.DataFrame, tab: str = ""):
 
                 # 1-hr interview — always available
                 if not is_1hr:
-                    if st.button("🎯 Advance to 1-Hr Interview", key=f"1hr_btn_{tab}_{r['id']}",
+                    if st.button("🎯 Advance to 1-Hr Interview", key=f"advance_1hr_btn_{tab}_{r['id']}",
                                  type="primary"):
                         with st.spinner("Sending..."):
                             sent_count = do_1hr_interview(r["id"], _s(r.get("phone")),
