@@ -324,27 +324,27 @@ def _stale_color(days: int) -> str:
 
 
 def _pipeline_progress(applicant: dict) -> int:
-    """Return the number of completed pipeline stages (1–6)."""
+    """Return milestones completed (0–5). 0 = just applied, 5 = fully through pipeline."""
     if applicant.get("one_hr_invited"):
-        return 6
-    if applicant.get("scheduled_block_at") or applicant.get("scheduling_fallback_sent_at"):
         return 5
-    if applicant.get("scheduling_requested_at"):
+    if applicant.get("scheduled_block_at") or applicant.get("scheduling_fallback_sent_at"):
         return 4
-    if applicant.get("calendly_booked"):
+    if applicant.get("scheduling_requested_at"):
         return 3
-    if applicant.get("invite_sent_at") or applicant.get("sms_sid") or applicant.get("manually_invited"):
+    if applicant.get("calendly_booked"):
         return 2
-    return 1
+    if applicant.get("invite_sent_at") or applicant.get("sms_sid") or applicant.get("manually_invited"):
+        return 1
+    return 0
 
 
 def _progress_bar_html(applicant: dict) -> str:
-    """Blue fill bar extending left→right as the applicant advances; solid red for Auto-DQ'd."""
+    """Blue fill bar: white when new, solid blue when fully through pipeline; solid red for Auto-DQ'd."""
     if applicant.get("auto_disqualified"):
-        return '<div style="height:8px;background:#e74c3c;border-radius:3px;margin-bottom:1px;"></div>'
-    pct = int(_pipeline_progress(applicant) / 6 * 100)
+        return '<div style="height:8px;background:#e74c3c;border-radius:3px;margin-bottom:3px;"></div>'
+    pct = int(_pipeline_progress(applicant) / 5 * 100)
     return (
-        '<div style="height:8px;background:#e8e8e8;border-radius:3px;overflow:hidden;margin-bottom:1px;">'
+        '<div style="height:8px;background:#e8e8e8;border-radius:3px;overflow:hidden;margin-bottom:3px;">'
         f'<div style="width:{pct}%;height:100%;background:#3498db;"></div>'
         '</div>'
     )
@@ -508,15 +508,10 @@ def render(subset: pd.DataFrame, tab: str = ""):
         messages = get_messages_for_applicant(str(r["id"]))
         pref_ch = _preferred_channel_from_messages(messages)
         stale_days = _staleness_days(dict(r), messages)
-        stale_color = _stale_color(stale_days)
         if stale_days > 0:
             label += f"  · Day {stale_days}"
 
-        st.markdown(
-            _progress_bar_html(dict(r))
-            + f'<div style="height:5px;background:{stale_color};border-radius:0 0 3px 3px;margin-bottom:2px;"></div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(_progress_bar_html(dict(r)), unsafe_allow_html=True)
         with st.expander(label):
             left, right = st.columns([3, 1])
 
