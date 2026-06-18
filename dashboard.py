@@ -71,7 +71,8 @@ def load(show_archived: bool = False) -> pd.DataFrame:
     df["created_at"] = pd.to_datetime(df["created_at"], utc=True).dt.tz_convert("US/Mountain")
     for col in ["score", "auto_disqualified", "manually_invited", "calendly_booked", "sms_sid", "invite_sent_at",
                 "one_hr_invited", "one_hr_invite_sent_at", "archived",
-                "scheduling_requested_at", "scheduled_block_at", "scheduling_fallback_sent_at"]:
+                "scheduling_requested_at", "scheduled_block_at", "scheduling_fallback_sent_at",
+                "interview_notes"]:
         if col not in df.columns:
             df[col] = None
     return df
@@ -322,6 +323,47 @@ def _stale_color(days: int) -> str:
     return _STALE_COLORS.get(min(days, 7), "#1a1a1a")
 
 
+_STAGE_COLORS: list[tuple[str, str]] = [
+    ("#e74c3c", "Auto-DQ'd"),
+    ("#27ae60", "Stretch Booked"),
+    ("#1abc9c", "Fallback Sent"),
+    ("#f1c40f", "1-Hr Invited"),
+    ("#e67e22", "Stretch Requested"),
+    ("#9b59b6", "15-min Booked"),
+    ("#3498db", "15-min Invited"),
+    ("#95a5a6", "New"),
+]
+
+_STAGE_LEGEND_HTML = (
+    '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:0.78em;margin-bottom:6px;">'
+    + "".join(
+        f'<span><span style="display:inline-block;width:11px;height:11px;background:{c};'
+        f'border-radius:2px;margin-right:4px;vertical-align:middle;"></span>{label}</span>'
+        for c, label in _STAGE_COLORS[::-1]  # show New → most-advanced left-to-right
+    )
+    + "</div>"
+)
+
+
+def _stage_color(applicant: dict) -> tuple[str, str]:
+    """Return (hex, label) for the applicant's current pipeline stage."""
+    if applicant.get("auto_disqualified"):
+        return "#e74c3c", "Auto-DQ'd"
+    if applicant.get("scheduled_block_at"):
+        return "#27ae60", "Stretch Booked"
+    if applicant.get("scheduling_fallback_sent_at"):
+        return "#1abc9c", "Fallback Sent"
+    if applicant.get("one_hr_invited"):
+        return "#f1c40f", "1-Hr Invited"
+    if applicant.get("scheduling_requested_at"):
+        return "#e67e22", "Stretch Requested"
+    if applicant.get("calendly_booked"):
+        return "#9b59b6", "15-min Booked"
+    if applicant.get("invite_sent_at") or applicant.get("sms_sid") or applicant.get("manually_invited"):
+        return "#3498db", "15-min Invited"
+    return "#95a5a6", "New"
+
+
 def _preferred_channel_from_messages(messages: list) -> str | None:
     """Return the channel of the first inbound message, or None."""
     for m in messages:
@@ -462,6 +504,8 @@ def render(subset: pd.DataFrame, tab: str = ""):
         st.info("Nothing here yet.")
         return
 
+    st.markdown(_STAGE_LEGEND_HTML, unsafe_allow_html=True)
+
     for _, r in subset.iterrows():
         score         = int(r.get("score") or 0)
         is_dq         = bool(r.get("auto_disqualified"))
@@ -480,12 +524,14 @@ def render(subset: pd.DataFrame, tab: str = ""):
         messages = get_messages_for_applicant(str(r["id"]))
         pref_ch = _preferred_channel_from_messages(messages)
         stale_days = _staleness_days(dict(r), messages)
-        color = _stale_color(stale_days)
+        stale_color = _stale_color(stale_days)
+        stage_c, _stage_label = _stage_color(dict(r))
         if stale_days > 0:
             label += f"  · Day {stale_days}"
 
         st.markdown(
-            f'<div style="height:5px;background:{color};border-radius:3px;margin-bottom:2px;"></div>',
+            f'<div style="height:5px;background:{stage_c};border-radius:3px 3px 0 0;margin-bottom:1px;"></div>'
+            f'<div style="height:5px;background:{stale_color};border-radius:0 0 3px 3px;margin-bottom:2px;"></div>',
             unsafe_allow_html=True,
         )
         with st.expander(label):
@@ -509,6 +555,19 @@ def render(subset: pd.DataFrame, tab: str = ""):
                 if r.get("application_text"):
                     with st.expander("Application answers"):
                         st.text(r["application_text"])
+
+                st.markdown("**Interview Notes** *(internal)*")
+                notes_val = _s(r.get("interview_notes"))
+                new_notes = st.text_area(
+                    "notes", value=notes_val,
+                    key=f"notes_{tab}_{r['id']}",
+                    label_visibility="collapsed",
+                    placeholder="Add notes from the 1-hr interview…",
+                    height=90,
+                )
+                if st.button("Save Notes", key=f"save_notes_{tab}_{r['id']}"):
+                    db.table("applicants").update({"interview_notes": new_notes}).eq("id", str(r["id"])).execute()
+                    st.success("Notes saved.")
 
             with right:
                 if not is_invited:
