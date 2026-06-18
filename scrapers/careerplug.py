@@ -228,7 +228,19 @@ def deactivate_applicant(profile_url: str, reason: str = "", headless: bool = Tr
                 )
 
             confirm.click()
-            page.wait_for_timeout(1500)
+            # Wait for the network to settle so the AJAX submission completes
+            # before the browser closes; fixed sleeps aren't reliable on cloud.
+            try:
+                page.wait_for_load_state("networkidle", timeout=10_000)
+            except Exception:
+                page.wait_for_timeout(4000)
+
+            # Verify: the Deactivate button should be gone (or page reloaded to a
+            # state where it no longer exists).  Raise if it's still there so the
+            # caller knows the deactivation didn't take.
+            still_there = page.locator('[data-action*="drawer#show"]').filter(has_text="Deactivate").count()
+            if still_there:
+                raise RuntimeError("Deactivate button still present after confirm — submission may have failed")
 
             logger.info("Deactivated %s with reason: %s", profile_url, reason or "(none)")
         finally:

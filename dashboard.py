@@ -323,45 +323,56 @@ def _stale_color(days: int) -> str:
     return _STALE_COLORS.get(min(days, 7), "#1a1a1a")
 
 
-_STAGE_COLORS: list[tuple[str, str]] = [
-    ("#e74c3c", "Auto-DQ'd"),
-    ("#27ae60", "Stretch Booked"),
-    ("#1abc9c", "Fallback Sent"),
-    ("#f1c40f", "1-Hr Invited"),
-    ("#e67e22", "Stretch Requested"),
-    ("#9b59b6", "15-min Booked"),
-    ("#3498db", "15-min Invited"),
-    ("#95a5a6", "New"),
+# Ordered pipeline stages: (label, color).  Each stage "adds" a segment to the bar.
+_PIPELINE_STAGES: list[tuple[str, str]] = [
+    ("Applied",          "#95a5a6"),  # 1 — always true
+    ("15-min Invited",   "#3498db"),  # 2
+    ("15-min Booked",    "#9b59b6"),  # 3
+    ("Stretch Requested","#e67e22"),  # 4
+    ("Stretch Done",     "#27ae60"),  # 5 — booked or fallback
+    ("1-Hr Invited",     "#f1c40f"),  # 6
 ]
 
-_STAGE_LEGEND_HTML = (
+_PIPELINE_LEGEND_HTML = (
     '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:0.78em;margin-bottom:6px;">'
     + "".join(
         f'<span><span style="display:inline-block;width:11px;height:11px;background:{c};'
         f'border-radius:2px;margin-right:4px;vertical-align:middle;"></span>{label}</span>'
-        for c, label in _STAGE_COLORS[::-1]  # show New → most-advanced left-to-right
+        for label, c in _PIPELINE_STAGES
     )
+    + '<span><span style="display:inline-block;width:11px;height:11px;background:#e74c3c;'
+    f'border-radius:2px;margin-right:4px;vertical-align:middle;"></span>Auto-DQ\'d</span>'
     + "</div>"
 )
 
+_EMPTY_SEGMENT = "#e0e0e0"
 
-def _stage_color(applicant: dict) -> tuple[str, str]:
-    """Return (hex, label) for the applicant's current pipeline stage."""
-    if applicant.get("auto_disqualified"):
-        return "#e74c3c", "Auto-DQ'd"
-    if applicant.get("scheduled_block_at"):
-        return "#27ae60", "Stretch Booked"
-    if applicant.get("scheduling_fallback_sent_at"):
-        return "#1abc9c", "Fallback Sent"
+
+def _pipeline_progress(applicant: dict) -> int:
+    """Return the number of completed pipeline stages (1–6)."""
     if applicant.get("one_hr_invited"):
-        return "#f1c40f", "1-Hr Invited"
+        return 6
+    if applicant.get("scheduled_block_at") or applicant.get("scheduling_fallback_sent_at"):
+        return 5
     if applicant.get("scheduling_requested_at"):
-        return "#e67e22", "Stretch Requested"
+        return 4
     if applicant.get("calendly_booked"):
-        return "#9b59b6", "15-min Booked"
+        return 3
     if applicant.get("invite_sent_at") or applicant.get("sms_sid") or applicant.get("manually_invited"):
-        return "#3498db", "15-min Invited"
-    return "#95a5a6", "New"
+        return 2
+    return 1
+
+
+def _progress_bar_html(applicant: dict) -> str:
+    """Stacked color bar: completed stages filled, remaining stages light gray."""
+    if applicant.get("auto_disqualified"):
+        return '<div style="height:8px;background:#e74c3c;border-radius:3px;margin-bottom:1px;"></div>'
+    progress = _pipeline_progress(applicant)
+    segments = "".join(
+        f'<div style="flex:1;background:{color if (i + 1) <= progress else _EMPTY_SEGMENT};"></div>'
+        for i, (_, color) in enumerate(_PIPELINE_STAGES)
+    )
+    return f'<div style="display:flex;height:8px;border-radius:3px;overflow:hidden;margin-bottom:1px;">{segments}</div>'
 
 
 def _preferred_channel_from_messages(messages: list) -> str | None:
@@ -504,7 +515,7 @@ def render(subset: pd.DataFrame, tab: str = ""):
         st.info("Nothing here yet.")
         return
 
-    st.markdown(_STAGE_LEGEND_HTML, unsafe_allow_html=True)
+    st.markdown(_PIPELINE_LEGEND_HTML, unsafe_allow_html=True)
 
     for _, r in subset.iterrows():
         score         = int(r.get("score") or 0)
@@ -525,13 +536,12 @@ def render(subset: pd.DataFrame, tab: str = ""):
         pref_ch = _preferred_channel_from_messages(messages)
         stale_days = _staleness_days(dict(r), messages)
         stale_color = _stale_color(stale_days)
-        stage_c, _stage_label = _stage_color(dict(r))
         if stale_days > 0:
             label += f"  · Day {stale_days}"
 
         st.markdown(
-            f'<div style="height:5px;background:{stage_c};border-radius:3px 3px 0 0;margin-bottom:1px;"></div>'
-            f'<div style="height:5px;background:{stale_color};border-radius:0 0 3px 3px;margin-bottom:2px;"></div>',
+            _progress_bar_html(dict(r))
+            + f'<div style="height:5px;background:{stale_color};border-radius:0 0 3px 3px;margin-bottom:2px;"></div>',
             unsafe_allow_html=True,
         )
         with st.expander(label):
