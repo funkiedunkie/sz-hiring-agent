@@ -112,6 +112,8 @@ Streamlit app. Run with `streamlit run dashboard.py`.
 - **📍 Schedule Stretch** button: appears before `scheduling_requested_at` is set; reveals a form pre-filled with Option D availability request ("share a couple days and times"); logs to `messages`, sets `scheduling_requested_at = now` so the scheduling cron watches for replies; does NOT set `one_hr_invited`
 - **🎯 Advance to 1-Hr Interview** button: always visible when `one_hr_invited = false` (not gated behind stretch completion); sends `CALENDLY_LINK_1HR` via candidate's preferred channel only (SMS if preferred or phone-only, email otherwise); sets `one_hr_invited = true` and `one_hr_invite_sent_at = now`
 - Cards show `✅` when `scheduled_block_at` is set (ClubReady block confirmed) and `📨` when `scheduling_fallback_sent_at` is set (fallback email sent to Boise staff)
+- **Pipeline stage color bar** + **staleness color bar**: two stacked 5px stripes above each card — top stripe = pipeline stage (gray=New, blue=15-min Invited, purple=15-min Booked, orange=Stretch Requested, green=Stretch Booked, gold=1-Hr Invited, teal=Fallback Sent, red=Auto-DQ'd); bottom stripe = staleness (green→black); a color legend renders above the card list in each tab
+- **Interview Notes** field: text area in the left column of each card (below Application Answers); saves to `applicants.interview_notes`; internal only — never read or sent by any pipeline script
 - **Archive / Unarchive** button per card: soft-deletes the applicant (`archived = true`); archived applicants are hidden by default and skipped by sync
 - **Show archived** toggle in the header: reveals archived applicants; shows Unarchive button instead of Archive
 - **🗑️ Bulk Archive** expander: multiselect any visible applicants and archive them in one click
@@ -287,7 +289,8 @@ create table if not exists applicants (
     scheduled_block_at        timestamptz,   -- when ClubReady block was successfully booked
     scheduling_fallback_sent_at timestamptz, -- when fallback email was sent to Boise staff
     archived                  boolean default false,
-    reply_notified_at         timestamptz    -- when manager was last texted about a candidate reply
+    reply_notified_at         timestamptz,   -- when manager was last texted about a candidate reply
+    interview_notes           text           -- internal manager notes from 1-hr interview; never sent to candidate
 );
 ```
 
