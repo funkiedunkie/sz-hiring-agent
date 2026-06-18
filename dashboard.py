@@ -323,31 +323,6 @@ def _stale_color(days: int) -> str:
     return _STALE_COLORS.get(min(days, 7), "#1a1a1a")
 
 
-# Ordered pipeline stages: (label, color).  Each stage "adds" a segment to the bar.
-_PIPELINE_STAGES: list[tuple[str, str]] = [
-    ("Applied",          "#95a5a6"),  # 1 — always true
-    ("15-min Invited",   "#3498db"),  # 2
-    ("15-min Booked",    "#9b59b6"),  # 3
-    ("Stretch Requested","#e67e22"),  # 4
-    ("Stretch Done",     "#27ae60"),  # 5 — booked or fallback
-    ("1-Hr Invited",     "#f1c40f"),  # 6
-]
-
-_PIPELINE_LEGEND_HTML = (
-    '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:0.78em;margin-bottom:6px;">'
-    + "".join(
-        f'<span><span style="display:inline-block;width:11px;height:11px;background:{c};'
-        f'border-radius:2px;margin-right:4px;vertical-align:middle;"></span>{label}</span>'
-        for label, c in _PIPELINE_STAGES
-    )
-    + '<span><span style="display:inline-block;width:11px;height:11px;background:#e74c3c;'
-    f'border-radius:2px;margin-right:4px;vertical-align:middle;"></span>Auto-DQ\'d</span>'
-    + "</div>"
-)
-
-_EMPTY_SEGMENT = "#e0e0e0"
-
-
 def _pipeline_progress(applicant: dict) -> int:
     """Return the number of completed pipeline stages (1–6)."""
     if applicant.get("one_hr_invited"):
@@ -364,15 +339,15 @@ def _pipeline_progress(applicant: dict) -> int:
 
 
 def _progress_bar_html(applicant: dict) -> str:
-    """Stacked color bar: completed stages filled, remaining stages light gray."""
+    """Blue fill bar extending left→right as the applicant advances; solid red for Auto-DQ'd."""
     if applicant.get("auto_disqualified"):
         return '<div style="height:8px;background:#e74c3c;border-radius:3px;margin-bottom:1px;"></div>'
-    progress = _pipeline_progress(applicant)
-    segments = "".join(
-        f'<div style="flex:1;background:{color if (i + 1) <= progress else _EMPTY_SEGMENT};"></div>'
-        for i, (_, color) in enumerate(_PIPELINE_STAGES)
+    pct = int(_pipeline_progress(applicant) / 6 * 100)
+    return (
+        '<div style="height:8px;background:#e8e8e8;border-radius:3px;overflow:hidden;margin-bottom:1px;">'
+        f'<div style="width:{pct}%;height:100%;background:#3498db;"></div>'
+        '</div>'
     )
-    return f'<div style="display:flex;height:8px;border-radius:3px;overflow:hidden;margin-bottom:1px;">{segments}</div>'
 
 
 def _preferred_channel_from_messages(messages: list) -> str | None:
@@ -514,8 +489,6 @@ def render(subset: pd.DataFrame, tab: str = ""):
     if subset.empty:
         st.info("Nothing here yet.")
         return
-
-    st.markdown(_PIPELINE_LEGEND_HTML, unsafe_allow_html=True)
 
     for _, r in subset.iterrows():
         score         = int(r.get("score") or 0)
