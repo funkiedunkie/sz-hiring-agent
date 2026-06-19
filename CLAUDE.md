@@ -42,7 +42,7 @@ dashboard.py (Streamlit)
 | `config.py` | Loads all env vars; raises on missing |
 | `triggers/email_trigger.py` | Polls Outlook inbox via Microsoft Graph API |
 | `scrapers/careerplug.py` | Playwright login → scrape application URL; `deactivate_applicant(profile_url, reason)` deactivates a candidate in CareerPlug |
-| `agents/resume_scorer.py` | Claude `claude-sonnet-4-20250514` scorer |
+| `agents/resume_scorer.py` | Claude `claude-sonnet-4-6` scorer |
 | `db/supabase_logger.py` | Insert applicant rows into Supabase |
 | `db/messages_logger.py` | Insert / fetch rows from the `messages` table |
 | `notifications/sms_sender.py` | Twilio SMS: `send_interview_invite()` (templated) + `send_sms(phone, body)` (custom) → returns SID; routes via `messaging_service_sid` when `TWILIO_MESSAGING_SERVICE_SID` is set (A2P 10DLC compliant), falls back to `from_=TWILIO_FROM_NUMBER` |
@@ -202,7 +202,7 @@ Use `updategrid(dateStr)` (JS) to jump to a date. Cells exist in 5-min increment
 **Fallback subject:** "Prospective Practitioner — {name}"  
 **Fallback body:** "Howdy. Could you please reach out to {name}...I wasn't able to find a time that worked for them."
 
-## Scoring rubric (claude-sonnet-4-20250514)
+## Scoring rubric (claude-sonnet-4-6)
 
 | Stars | Criteria |
 |-------|----------|

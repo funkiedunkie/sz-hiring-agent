@@ -31,7 +31,7 @@ import config
 
 logger = logging.getLogger(__name__)
 
-SCORING_MODEL = "claude-sonnet-4-20250514"
+SCORING_MODEL = "claude-sonnet-4-6"
 
 _client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
