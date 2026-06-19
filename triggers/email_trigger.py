@@ -28,11 +28,11 @@ def get_access_token():
 
 
 def _search_inbox(token, subject_term):
-    """Fetch inbox messages matching a subject search term."""
+    """Fetch inbox messages matching a subject search term, including body for URL extraction."""
     headers = {"Authorization": f"Bearer {token}"}
     params = {
         "$search": f'"subject:{subject_term}"',
-        "$select": "id,subject,receivedDateTime,isRead",
+        "$select": "id,subject,receivedDateTime,isRead,body",
         "$top": 25,
     }
     resp = requests.get(
@@ -87,10 +87,18 @@ def extract_applicant_name(subject: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
+def extract_app_url(body_content: str) -> str | None:
+    """Extract the CareerPlug application URL from an email body (HTML or plain text)."""
+    match = re.search(r"https://app\.careerplug\.com/manage/apps/(\d+)", body_content)
+    return match.group(0) if match else None
+
+
 def poll_once(mark_seen: bool = True) -> list:
     """
     Single-shot check: fetch unread trigger emails, optionally mark them read,
-    and return a list of TriggerEmail objects with .subject, .applicant_name, .email_id.
+    and return a list of TriggerEmail objects with .subject, .applicant_name,
+    .app_url, .email_id.  app_url is extracted from the email body so the
+    pipeline can use a direct URL instead of a name-based scraper search.
     """
     from dataclasses import dataclass
 
@@ -99,6 +107,7 @@ def poll_once(mark_seen: bool = True) -> list:
         subject: str
         applicant_name: str
         email_id: str
+        app_url: str | None = None
 
     results = []
     try:
@@ -110,7 +119,11 @@ def poll_once(mark_seen: bool = True) -> list:
             if not name:
                 logger.warning("Could not extract applicant name from: %r", subject)
                 continue
-            results.append(TriggerEmail(subject=subject, applicant_name=name, email_id=email["id"]))
+            body_content = (email.get("body") or {}).get("content", "")
+            app_url = extract_app_url(body_content)
+            if not app_url:
+                logger.warning("No CareerPlug URL found in email body for %r — will fall back to name search", name)
+            results.append(TriggerEmail(subject=subject, applicant_name=name, email_id=email["id"], app_url=app_url))
             if mark_seen:
                 mark_as_read(token, email["id"])
     except Exception as e:

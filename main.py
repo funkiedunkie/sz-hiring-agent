@@ -161,8 +161,9 @@ def run(dry_run: bool = False, direct_url: str = "") -> None:
         logger.info("Deduplicated to %d unique applicant(s)", len(unique_triggers))
 
     for trigger in unique_triggers:
-        logger.info("Processing: %s -> %s", trigger.subject, trigger.applicant_name)
-        process_applicant(trigger.applicant_name, dry_run=dry_run, trigger_subject=trigger.subject)
+        name_or_url = trigger.app_url or trigger.applicant_name
+        logger.info("Processing: %s -> %s", trigger.subject, name_or_url)
+        process_applicant(name_or_url, dry_run=dry_run, trigger_subject=trigger.subject)
 
     logger.info("Hiring agent finished")
 
