@@ -27,13 +27,11 @@ def get_access_token():
     return resp.json()["access_token"]
 
 
-def fetch_new_applications(token):
-    """Poll inbox for unread CareerPlug notification emails."""
+def _search_inbox(token, subject_term):
+    """Fetch inbox messages matching a subject search term."""
     headers = {"Authorization": f"Bearer {token}"}
-    # Use $search to find messages by subject regardless of inbox position.
-    # $search can't be combined with $filter, so we filter isRead in Python.
     params = {
-        "$search": f'"subject:{EMAIL_TRIGGER_SUBJECT}"',
+        "$search": f'"subject:{subject_term}"',
         "$select": "id,subject,receivedDateTime,isRead",
         "$top": 25,
     }
@@ -43,7 +41,24 @@ def fetch_new_applications(token):
         params=params,
     )
     resp.raise_for_status()
-    messages = resp.json().get("value", [])
+    return resp.json().get("value", [])
+
+
+def fetch_new_applications(token):
+    """Poll inbox for unread CareerPlug notification emails.
+
+    CareerPlug uses two subject templates:
+      - 'Name - New Applicant for <job>'           (EMAIL_TRIGGER_SUBJECT)
+      - 'Name - New Fast Track Applicant for <job>' (always searched)
+    Both are searched and merged so neither template is missed.
+    """
+    seen_ids = set()
+    messages = []
+    for term in [EMAIL_TRIGGER_SUBJECT, "New Fast Track Applicant"]:
+        for m in _search_inbox(token, term):
+            if m["id"] not in seen_ids:
+                seen_ids.add(m["id"])
+                messages.append(m)
     # Filter to unread only
     return [m for m in messages if not m.get("isRead", True)]
 
