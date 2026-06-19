@@ -214,6 +214,8 @@ if "flash" in st.session_state:
     _flash_level, _flash_msg = st.session_state.pop("flash")
     if _flash_level == "success":
         st.success(_flash_msg)
+    elif _flash_level == "error":
+        st.error(_flash_msg)
     elif _flash_level == "warning":
         st.warning(_flash_msg)
 
@@ -711,7 +713,7 @@ def render(subset: pd.DataFrame, tab: str = ""):
                                 with st.spinner("Deactivating in CareerPlug..."):
                                     cp_ok, msg = do_deactivate(r["id"], _s(r.get("profile_url")), dq_reason)
                                 st.session_state.pop(f"show_dq_{r['id']}", None)
-                                level = "success" if cp_ok else "warning"
+                                level = "success" if cp_ok else "error"
                                 st.session_state["flash"] = (level, f"{r['name']}: {msg}")
                                 st.rerun()
                         with c_dq2:
