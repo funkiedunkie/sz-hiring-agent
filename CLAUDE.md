@@ -68,11 +68,13 @@ The trigger uses **Microsoft Graph API** (not IMAP, not Gmail, not `imapclient`)
 - Auth: client-credentials OAuth2 flow (app-only, no user sign-in required)
 - Token endpoint: `https://login.microsoftonline.com/{GRAPH_TENANT_ID}/oauth2/v2.0/token`
 - Mailbox polled: `GRAPH_USER_EMAIL` (the franchise owner's Outlook/M365 account)
-- Watches for unread messages whose subject contains `EMAIL_TRIGGER_SUBJECT`
-- Marks each processed email as read via `PATCH /users/{email}/messages/{id}`
+- Watches for unread messages whose subject contains `EMAIL_TRIGGER_SUBJECT` **and** `"New Fast Track Applicant"` (both searched and merged)
+- Fetches the email **body** to extract the CareerPlug application URL directly (`https://app.careerplug.com/manage/apps/<id>`)
+- Marks each processed email as read via `PATCH /users/{email}/messages/{id}` (requires `Mail.ReadWrite` permission; logs a warning and continues if missing)
 
-`poll_once()` returns a list of `TriggerEmail(subject, app_url, email_id)` objects
-and is the entry point used by `main.py`.
+`poll_once()` returns a list of `TriggerEmail(subject, applicant_name, app_url, email_id)` objects.
+`app_url` is parsed from the email body; `main.py` passes it directly to the scraper so no name-based
+CareerPlug list search is needed. Falls back to name search only if the URL could not be parsed.
 
 ## Outreach notifications
 
