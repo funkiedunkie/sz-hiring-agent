@@ -1,6 +1,7 @@
 """Stretch Zone — Hiring Dashboard"""
 import subprocess
 import sys
+import threading
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timezone, timedelta
@@ -108,22 +109,22 @@ def do_invite(row_id: str, name: str, phone: str, email: str):
                            external_id=email_id, sent_at=now)
 
 def do_deactivate(row_id: str, profile_url: str, reason: str) -> tuple[bool, str]:
-    """Archive in Supabase (always), then attempt CareerPlug deactivation.
-    Returns (cp_ok, message). Supabase archive always runs first."""
-    # Step 1: Supabase — must succeed
+    """Archive in Supabase immediately, then fire CareerPlug deactivation in a background
+    thread. Returns as soon as Supabase completes so the UI is unblocked."""
     try:
-        resp = db.table("applicants").update({"archived": True}).eq("id", str(row_id)).execute()
+        db.table("applicants").update({"archived": True}).eq("id", str(row_id)).execute()
     except Exception as e:
         return False, f"Supabase update failed: {e}"
 
-    # Step 2: CareerPlug — best effort, catch everything including asyncio errors
-    try:
-        deactivate_applicant(profile_url, reason)
-        return True, f"{reason} — archived and deactivated in CareerPlug."
-    except BaseException as e:
-        import traceback
-        traceback.print_exc()
-        return False, f"Archived. CareerPlug deactivation failed: {type(e).__name__}: {e}"
+    def _cp_deactivate():
+        try:
+            deactivate_applicant(profile_url, reason)
+        except BaseException as e:
+            import traceback
+            traceback.print_exc()
+
+    threading.Thread(target=_cp_deactivate, daemon=True).start()
+    return True, "Archived. Deactivating in CareerPlug in the background."
 
 def do_mark_booked(row_id: str):
     db.table("applicants").update({"calendly_booked": True}).eq("id", row_id).execute()
@@ -710,8 +711,7 @@ def render(subset: pd.DataFrame, tab: str = ""):
                         c_dq1, c_dq2 = st.columns(2)
                         with c_dq1:
                             if st.button("Confirm & Archive", key=f"dq_confirm_{tab}_{r['id']}", type="primary"):
-                                with st.spinner("Deactivating in CareerPlug..."):
-                                    cp_ok, msg = do_deactivate(r["id"], _s(r.get("profile_url")), dq_reason)
+                                cp_ok, msg = do_deactivate(r["id"], _s(r.get("profile_url")), dq_reason)
                                 st.session_state.pop(f"show_dq_{r['id']}", None)
                                 level = "success" if cp_ok else "error"
                                 st.session_state["flash"] = (level, f"{r['name']}: {msg}")
