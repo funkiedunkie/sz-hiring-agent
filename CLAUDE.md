@@ -26,7 +26,7 @@ sync/email_sync.py  (cron / dashboard button)
   └─▶ Graph API inbox + sentitems → backfill all emails for known applicants
 
 follow_up.py  (cron, runs after main.py)
-  └─▶ notifications/follow_up.py → follow-ups, auto-archive, manager reply notifications
+  └─▶ notifications/follow_up.py → follow-ups, auto-archive, auto-reply agent, manager reply notifications
 
 schedule_interviews.py  (cron, runs after follow_up.py)
   └─▶ notifications/scheduling.py → parse availability replies → ClubReady booking → confirm or fallback
@@ -45,13 +45,14 @@ dashboard.py (Streamlit)
 | `agents/resume_scorer.py` | Claude `claude-sonnet-4-6` scorer |
 | `db/supabase_logger.py` | Insert applicant rows into Supabase |
 | `db/messages_logger.py` | Insert / fetch rows from the `messages` table |
-| `notifications/sms_sender.py` | Twilio SMS: `send_interview_invite()` (templated) + `send_sms(phone, body)` (custom) → returns SID; routes via `messaging_service_sid` when `TWILIO_MESSAGING_SERVICE_SID` is set (A2P 10DLC compliant), falls back to `from_=TWILIO_FROM_NUMBER` |
+| `notifications/sms_sender.py` | Twilio SMS: `send_interview_invite()` (templated) + `send_sms(phone, body)` (custom) → returns SID; routes via `messaging_service_sid` when `TWILIO_MESSAGING_SERVICE_SID` is set (A2P 10DLC compliant), falls back to `from_=TWILIO_FROM_NUMBER`; enforces rate limits (global 30/day, per-candidate 3/24h, duplicate suppression 1h) |
 | `notifications/email_sender.py` | Graph API email: `send_outreach_email()` (auto-pipeline, returns bool) + `send_email(to, subject, body)` (dashboard, draft→send, returns Graph message ID for dedup) |
 | `sync/sms_sync.py` | Backfill Twilio inbound+outbound SMS into `messages` for all known applicants |
 | `sync/email_sync.py` | Backfill Graph inbox+sentitems emails into `messages` for all known applicants |
 | `main.py` | Orchestrates the full pipeline |
-| `follow_up.py` | Cron entry point: follow-ups, auto-archive, manager notifications (calls `notifications/follow_up.py`) |
-| `notifications/follow_up.py` | Follow-up logic + `run_reply_notifications()`: texts `MANAGER_PHONE` when a candidate replied and the agent needs direction; dedup via `reply_notified_at` |
+| `agents/reply_agent.py` | Claude `claude-haiku-4-5-20251001` auto-reply agent: `auto_reply(candidate, messages, latest_inbound)` → reply text or None (escalate); answers FAQ (location, dress code, parking, pay); fails safe to escalation on error |
+| `follow_up.py` | Cron entry point: follow-ups, auto-archive, auto-reply, manager notifications (calls `notifications/follow_up.py`) |
+| `notifications/follow_up.py` | Follow-up logic + `run_auto_reply()`: autonomous FAQ responses via reply agent + `run_reply_notifications()`: texts `MANAGER_PHONE` only when agent can't handle; dedup via `reply_notified_at`; stale guards: follow-up skipped if invite >14 days old, notification skipped if reply >5 business days old |
 | `schedule_interviews.py` | Cron entry point: processes availability replies and books ClubReady slots |
 | `scrapers/clubready.py` | Playwright: `block_time(date_str, time_str, name, phone, email)` blocks 30-min slot in ClubReady (blue, detail note) |
 | `agents/availability_parser.py` | Claude parser: `parse_availability(reply_text)` → `[{date, time}]` |
@@ -59,7 +60,7 @@ dashboard.py (Streamlit)
 | `backfill.py` | One-shot backfill: scrapes all CareerPlug apps, skips ones already in Supabase, runs full pipeline for new ones |
 | `dashboard.py` | Streamlit dashboard: applicant cards + per-applicant SMS/email conversation thread + reply UI |
 | `supabase/functions/calendly-webhook/index.ts` | Edge Function: marks applicant as booked on Calendly `invitee.created` |
-| `supabase/functions/twilio-webhook/index.ts` | Edge Function: receives Twilio inbound SMS, matches phone → applicant, inserts `messages` row |
+| `supabase/functions/twilio-webhook/index.ts` | Edge Function: receives Twilio inbound SMS; if sender is `MANAGER_PHONE`, routes reply to candidate by name prefix (`FIRSTNAME: message` format, 3+ chars); otherwise matches phone → applicant, inserts `messages` row |
 
 ## Email trigger — Microsoft Graph API
 
@@ -139,7 +140,9 @@ supabase secrets set TWILIO_AUTH_TOKEN=<your token>
 - Twilio Console → Phone Numbers → your number → Messaging → "A message comes in"
 - Set to Webhook, HTTP POST: `https://<your-project-ref>.supabase.co/functions/v1/twilio-webhook`
 
-**Matching logic:** `From` phone (normalized to E.164) → `applicants.phone`. Unmatched numbers return 200 (no retry).
+**Matching logic:** If `From` == `MANAGER_PHONE`: parse `FIRSTNAME: message` prefix (≥3 chars) → match candidate by first name → forward body to candidate via Twilio API → log as outbound. Otherwise: `From` phone → `applicants.phone`. Unmatched numbers return 200 (no retry).
+
+**Required Supabase secrets (set via `supabase secrets set`):** `TWILIO_AUTH_TOKEN`, `TWILIO_ACCOUNT_SID`, `TWILIO_FROM_NUMBER`, `TWILIO_MESSAGING_SERVICE_SID`, `MANAGER_PHONE`
 
 ## Message sync — `sync/sms_sync.py` and `sync/email_sync.py`
 
@@ -208,13 +211,17 @@ Use `updategrid(dateStr)` (JS) to jump to a date. Cells exist in 5-min increment
 
 | Stars | Criteria |
 |-------|----------|
-| ⭐⭐⭐⭐ | 2+ recent relevant jobs **or** exercise science / kinesiology degree |
-| ⭐⭐⭐ | 2+ recent relevant jobs, no degree |
-| ⭐⭐ | Unrelated but ≥1 yr/role; healthcare-adjacent; single long-tenure employer |
-| ⭐ | No relevance, no notable tenure |
+| ⭐⭐⭐⭐ | Qualifying degree (exercise science, kinesiology, physical therapy, athletic training, sports medicine) — degree alone is sufficient; certifications do NOT substitute |
+| ⭐⭐⭐ | 2+ recent relevant jobs in fitness/training; **or** personal training certs (NASM, ACSM, CSCS, ACE, ISSA) with ≥1 yr/role work history; **or** massage therapy with ≥1 yr/role work history |
+| ⭐⭐ | Personal training certs with <1 yr/role (poor longevity); **or** massage therapy with <1 yr/role; **or** unrelated but ≥1 yr/role; **or** single long-tenure employer |
+| ⭐ | Weak/tangential health-wellness connection that prevents auto-DQ — e.g. child care at a gym, biology degree, HS health activities, supplement retail |
 | AUTO-DQ | High school student; job hopper (≤7-month stints); unrelated + <2 yr total |
 
-Borderline tiebreaker: sparse resume → round down; sports/GPA/achievements → round up.
+**Relevant jobs** = personal training, stretch therapy, PT/PT aide, athletic training, sports coaching, fitness instruction. Child care, front desk, or retail at a gym/YMCA does NOT count even if the employer is a wellness venue.
+
+**Qualifying degrees** = exercise science, kinesiology, physical therapy, athletic training, sports medicine only. Biology, pre-med, nursing, and general health degrees do NOT qualify.
+
+Borderline tiebreaker: sparse resume → round down; college-level competitive athletics → round up one tier. High school extracurriculars and clubs do NOT count toward rounding up.
 
 ## Environment variables
 
@@ -259,7 +266,7 @@ MANAGER_PHONE                  # Duncan's E.164 phone number; if set, agent text
 
 # Optional
 EMAIL_TRIGGER_SUBJECT          # default: "New Application"
-SCORE_NOTIFY_THRESHOLD         # default: 2  (1–4 star scale)
+SCORE_NOTIFY_THRESHOLD         # default: 1  (invite everyone not auto-DQ'd)
 ```
 
 ## Supabase — table schemas
@@ -312,6 +319,18 @@ create table if not exists messages (
 );
 ```
 
+## Auto-reply agent — `agents/reply_agent.py`
+
+Runs on every cron tick via `run_auto_reply()` in `notifications/follow_up.py`, before manager notifications.
+
+**Answers autonomously:** location (virtual/Stretch Zone Boise/Bodies in Motion depending on stage), dress code, parking, what to expect, pay/compensation questions (deflects to interview).
+
+**Escalates to manager when:** candidate withdraws, wants to reschedule, complaint, or genuinely unknown question.
+
+**Dedup:** sets `reply_notified_at = now` after auto-replying → `run_reply_notifications()` skips that candidate on the same tick.
+
+**Model:** `claude-haiku-4-5-20251001` (fast, cheap). Fails safe — any error returns None and escalates to Duncan.
+
 ## Follow-up outreach — `notifications/follow_up.py`
 
 Runs automatically via `follow_up.py` after `main.py` on every cron tick.
@@ -330,6 +349,8 @@ Runs automatically via `follow_up.py` after `main.py` on every cron tick.
 - Email: longer — check in, calendar link, no-pressure opt-out
 
 **Dedup:** `followup_sent_at` is set on success; subsequent cron runs skip the applicant.
+
+**Stale guard:** skipped if `invite_sent_at` is older than 14 days and follow-up was never sent (zombie follow-up prevention).
 
 ## Manager reply notifications — `run_reply_notifications()` in `notifications/follow_up.py`
 
