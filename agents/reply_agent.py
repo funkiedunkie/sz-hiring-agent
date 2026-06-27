@@ -75,10 +75,11 @@ def auto_reply(candidate: dict, messages: list, latest_inbound: str) -> str | No
         speaker = "Duncan" if m["direction"] == "outbound" else (candidate.get("name") or "Candidate").split()[0]
         history_lines.append(f"{speaker}: {m.get('body', '')}")
 
+    history_text = "\n".join(history_lines)
     user_content = (
         f"Candidate: {candidate.get('name')}\n"
         f"Stage: {stage}\n\n"
-        f"Recent conversation:\n{'\n'.join(history_lines)}\n\n"
+        f"Recent conversation:\n{history_text}\n\n"
         f'Latest message from candidate: "{latest_inbound}"\n\n'
         f"Respond or escalate?"
     )
