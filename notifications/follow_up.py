@@ -18,7 +18,8 @@ def _sms_body(first_name: str) -> str:
     return (
         f"Hi {first_name}, still interested in Stretch Zone? "
         f"Grab a time here: {config.CALENDLY_LINK} "
-        f"or just reply to let me know either way. Thanks, Duncan"
+        f"or just reply to let me know either way. Thanks, Duncan\n\n"
+        f"Reply STOP to opt out."
     )
 
 
@@ -94,7 +95,12 @@ def _is_eligible(applicant: dict, replied_ids: set) -> bool:
 
     invite_sent = datetime.fromisoformat(applicant["invite_sent_at"].replace("Z", "+00:00"))
     eligible_after = _add_business_days(invite_sent, 2)
-    return datetime.now(timezone.utc) >= eligible_after
+    if datetime.now(timezone.utc) < eligible_after:
+        return False
+    # Don't fire a zombie follow-up if the invite is older than 14 days and we never followed up
+    if (datetime.now(timezone.utc) - invite_sent).days > 14:
+        return False
+    return True
 
 
 def send_follow_up(applicant: dict) -> bool:
@@ -155,6 +161,87 @@ def run_follow_ups() -> int:
                 sent_count += 1
 
     logger.info("Follow-up run complete: %d sent", sent_count)
+    return sent_count
+
+
+def run_auto_reply() -> int:
+    """
+    For each candidate with an unhandled inbound reply, attempt an autonomous response.
+    If the agent handles it: sends the reply, logs it, sets reply_notified_at (so the
+    manager notification dedup skips this candidate on the same tick).
+    If the agent escalates: leaves reply_notified_at untouched so run_reply_notifications() fires.
+    Returns count of auto-replies sent.
+    """
+    from agents.reply_agent import auto_reply
+    from collections import defaultdict
+
+    resp = (
+        db.table("applicants")
+        .select(
+            "id, name, phone, email, reply_notified_at, calendly_booked, "
+            "scheduled_block_at, one_hr_invited, invite_sent_at, auto_disqualified"
+        )
+        .neq("archived", True)
+        .not_.is_("invite_sent_at", "null")
+        .execute()
+    )
+    candidates = resp.data or []
+    if not candidates:
+        return 0
+
+    ids = [c["id"] for c in candidates]
+    msgs_resp = (
+        db.table("messages")
+        .select("applicant_id, direction, body, sent_at, created_at")
+        .in_("applicant_id", ids)
+        .order("created_at", desc=False)
+        .execute()
+    )
+    messages_by_id: dict[str, list] = defaultdict(list)
+    for m in (msgs_resp.data or []):
+        messages_by_id[m["applicant_id"]].append(m)
+
+    sent_count = 0
+    for c in candidates:
+        if c.get("auto_disqualified") or c.get("calendly_booked") or c.get("scheduled_block_at"):
+            continue
+
+        msgs = messages_by_id[c["id"]]
+        if not msgs:
+            continue
+
+        latest = next((m for m in reversed(msgs) if m["direction"] == "inbound"), None)
+        if not latest:
+            continue
+
+        inbound_ts = latest.get("sent_at") or latest.get("created_at") or ""
+        notified_at = c.get("reply_notified_at") or ""
+        if notified_at and inbound_ts <= notified_at:
+            continue  # already handled
+
+        if _business_days_since(inbound_ts) > 5:
+            continue  # stale backlog guard
+
+        reply_text = auto_reply(c, msgs, latest.get("body", ""))
+        if not reply_text:
+            continue  # agent escalating — let run_reply_notifications() handle it
+
+        phone = c.get("phone") or ""
+        if not phone:
+            continue
+
+        sid = send_sms(phone, reply_text)
+        if sid:
+            now = datetime.now(timezone.utc).isoformat()
+            insert_message(
+                applicant_id=c["id"], channel="sms", direction="outbound",
+                body=reply_text, external_id=sid, sent_at=now,
+            )
+            db.table("applicants").update({"reply_notified_at": now}).eq("id", c["id"]).execute()
+            sent_count += 1
+            logger.info("Auto-replied to %s: %s", c.get("name"), reply_text[:60])
+
+    logger.info("Auto-reply run complete: %d sent", sent_count)
     return sent_count
 
 
@@ -222,6 +309,11 @@ def run_reply_notifications() -> int:
         if notified_at and inbound_ts <= notified_at:
             continue
 
+        # Don't fire stale notifications from a backlog (e.g. after SMS was re-enabled)
+        if _business_days_since(inbound_ts) > 5:
+            logger.info("Skipping stale reply notification for %s (reply > 5 business days old)", c.get("name"))
+            continue
+
         first_name = (str(c.get("name") or "").split()[0]) or "A candidate"
         snippet = (latest.get("body") or "").strip()
         if len(snippet) > 60:
@@ -230,12 +322,14 @@ def run_reply_notifications() -> int:
         if snippet:
             body = (
                 f"Hi Duncan — {first_name} replied: \"{snippet}\" — "
-                f"I need your direction. Check the dashboard. — SZ Agent"
+                f"Reply '{first_name.upper()}: [your message]' to respond directly, "
+                f"or check the dashboard. — SZ Agent"
             )
         else:
             body = (
                 f"Hi Duncan — {first_name} replied and needs a response. "
-                f"Check the dashboard. — SZ Agent"
+                f"Reply '{first_name.upper()}: [your message]' to respond directly, "
+                f"or check the dashboard. — SZ Agent"
             )
 
         sid = send_sms(manager_phone, body)
