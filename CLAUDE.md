@@ -253,7 +253,7 @@ GRAPH_USER_EMAIL               # the Outlook mailbox to poll and send from
 
 # Calendly
 CALENDLY_LINK                  # 15-min virtual interview link
-CALENDLY_LINK_1HR              # 1-hour in-person interview link (default: https://calendly.com/duncan-bodiesinmotionidaho/interview)
+CALENDLY_LINK_1HR              # 1-hour in-person interview link (default: https://calendly.com/duncan-bodiesinmotionidaho-o_ka/stretch-zone-interview)
 CALENDLY_WEBHOOK_SIGNING_KEY   # from Calendly Developer → Webhooks → Signing Key (used by Edge Function)
 
 # ClubReady (scheduling automation)
