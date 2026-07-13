@@ -102,10 +102,43 @@ def extract_applicant_name(subject: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
+def _resolve_wrapped_app_url(body_content: str) -> str | None:
+    """Follow ProofPoint / CareerPlug click-tracking links to recover the app URL.
+
+    CareerPlug notification emails to this mailbox are rewritten by ProofPoint
+    URL Defense, so the raw https://app.careerplug.com/manage/apps/<id> link is
+    never present in the body — only wrapped redirects are. We GET each wrapped
+    link (they 302 through email.reply.careerplug.com to the real app URL before
+    landing on the sign-in page) and pick the manage/apps/<id> URL seen anywhere
+    in the redirect chain. Best-effort: any failure returns None so the caller
+    falls back to name search.
+    """
+    body = body_content.replace("&amp;", "&")
+    wrapped = re.findall(r"https://urldefense\.proofpoint\.com/v2/url\?[^\s\"'<]+", body)
+    wrapped += re.findall(r"https://email\.reply\.careerplug\.com/c/[^\s\"'<&]+", body)
+    for link in wrapped:
+        try:
+            resp = requests.get(link, allow_redirects=True, timeout=20)
+        except Exception as e:
+            logger.warning("Could not follow wrapped CareerPlug link: %s", e)
+            continue
+        chain = " ".join([h.url for h in resp.history] + [resp.url])
+        match = re.search(r"https://app\.careerplug\.com/manage/apps/\d+", chain)
+        if match:
+            return match.group(0)
+    return None
+
+
 def extract_app_url(body_content: str) -> str | None:
-    """Extract the CareerPlug application URL from an email body (HTML or plain text)."""
+    """Extract the CareerPlug application URL from an email body (HTML or plain text).
+
+    Tries a direct match first; if the URL is ProofPoint-wrapped (the usual case
+    for this mailbox), follows the redirect chain to recover it.
+    """
     match = re.search(r"https://app\.careerplug\.com/manage/apps/(\d+)", body_content)
-    return match.group(0) if match else None
+    if match:
+        return match.group(0)
+    return _resolve_wrapped_app_url(body_content)
 
 
 def poll_once(mark_seen: bool = True) -> list:
