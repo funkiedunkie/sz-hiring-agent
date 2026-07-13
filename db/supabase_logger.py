@@ -40,6 +40,32 @@ def check_applicant_exists(profile_url: str) -> bool:
     return len(resp.data) > 0
 
 
+def find_active_applicant_by_contact(email: str, phone: str) -> dict[str, Any] | None:
+    """Return an existing non-archived applicant that shares this email or phone.
+
+    Guards against contacting the same person twice when they apply to more than
+    one CareerPlug posting: each posting has a distinct profile_url (so the
+    profile_url dedup misses it), but the same email/phone means it's one human.
+    Returns the earliest matching row, or None. Blank email/phone are ignored.
+    """
+    filters = []
+    if email:
+        filters.append(f"email.eq.{email}")
+    if phone:
+        filters.append(f"phone.eq.{phone}")
+    if not filters:
+        return None
+    resp = (
+        _client.table(TABLE)
+        .select("*")
+        .or_(",".join(filters))
+        .neq("archived", True)
+        .order("created_at")
+        .execute()
+    )
+    return resp.data[0] if resp.data else None
+
+
 def get_applicant_by_url(profile_url: str) -> dict[str, Any] | None:
     """Return the applicant row for *profile_url*, or None if not found."""
     resp = _client.table(TABLE).select("*").eq("profile_url", profile_url).execute()

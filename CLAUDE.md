@@ -43,7 +43,7 @@ dashboard.py (Streamlit)
 | `triggers/email_trigger.py` | Polls Outlook inbox via Microsoft Graph API |
 | `scrapers/careerplug.py` | Playwright login → scrape application URL; `deactivate_applicant(profile_url, reason)` deactivates a candidate in CareerPlug |
 | `agents/resume_scorer.py` | Claude `claude-sonnet-4-6` scorer |
-| `db/supabase_logger.py` | Insert applicant rows into Supabase |
+| `db/supabase_logger.py` | Insert applicant rows into Supabase; `check_applicant_exists(profile_url)` dedups the same application, `find_active_applicant_by_contact(email, phone)` dedups the same **person** across different postings so they aren't invited twice |
 | `db/messages_logger.py` | Insert / fetch rows from the `messages` table |
 | `notifications/sms_sender.py` | Twilio SMS: `send_interview_invite()` (templated) + `send_sms(phone, body)` (custom) → returns SID; routes via `messaging_service_sid` when `TWILIO_MESSAGING_SERVICE_SID` is set (A2P 10DLC compliant), falls back to `from_=TWILIO_FROM_NUMBER`; enforces rate limits (global 30/day, per-candidate 3/24h, duplicate suppression 1h) |
 | `notifications/email_sender.py` | Graph API email: `send_outreach_email()` (auto-pipeline, returns bool) + `send_email(to, subject, body)` (dashboard, draft→send, returns Graph message ID for dedup) |

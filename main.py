@@ -8,7 +8,7 @@ import sys
 import config
 from agents.resume_scorer import score_candidate
 from db.supabase_logger import (
-    log_applicant, check_applicant_exists,
+    log_applicant, check_applicant_exists, find_active_applicant_by_contact,
     get_applicant_by_url, update_contact_info, set_invite_sent,
 )
 from notifications.email_sender import send_outreach_email
@@ -46,10 +46,22 @@ def process_applicant(name_or_url: str, dry_run: bool, trigger_subject: str = ""
 
     logger.info("Scraped: %s | %s | %s", applicant.name, applicant.email, applicant.phone)
 
-    # Dedup: skip if already logged in Supabase
+    # Dedup: skip if this exact application (profile_url) is already logged
     if not dry_run and check_applicant_exists(applicant.profile_url):
         logger.info("Already processed %s (%s) — skipping", applicant.name, applicant.profile_url)
         return True
+
+    # Dedup: skip if the same person (email/phone) already exists from another
+    # posting — otherwise one human gets a second SMS + email invite.
+    if not dry_run:
+        dup = find_active_applicant_by_contact(applicant.email, applicant.phone)
+        if dup:
+            logger.info(
+                "Duplicate applicant — %s (%s) shares contact with existing '%s' (%s); "
+                "skipping outreach and insert to avoid double-contacting the same person",
+                applicant.name, applicant.profile_url, dup.get("name"), dup.get("profile_url"),
+            )
+            return True
 
     try:
         result = score_candidate(
