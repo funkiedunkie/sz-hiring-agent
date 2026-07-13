@@ -71,7 +71,7 @@ The trigger uses **Microsoft Graph API** (not IMAP, not Gmail, not `imapclient`)
 - Mailbox polled: `GRAPH_USER_EMAIL` (the franchise owner's Outlook/M365 account)
 - Watches for unread messages whose subject contains `EMAIL_TRIGGER_SUBJECT` **and** `"New Fast Track Applicant"` (both searched and merged)
 - Fetches the email **body** to extract the CareerPlug application URL directly (`https://app.careerplug.com/manage/apps/<id>`)
-- Marks each processed email as read via `PATCH /users/{email}/messages/{id}` (requires `Mail.ReadWrite` permission; logs a warning and continues if missing)
+- Marks each email as read via `PATCH /users/{email}/messages/{id}` **only after its applicant is fully handled** (logged to Supabase, already logged, or dry run) — `poll_once` no longer marks during polling. A transient failure (e.g. the CareerPlug scraper can't launch) leaves the email **unread** so the next cron run retries it instead of dropping the candidate. `main.py` calls `mark_read(email_id)` per email on success. Requires `Mail.ReadWrite` permission; logs a warning and continues if missing.
 
 `poll_once()` returns a list of `TriggerEmail(subject, applicant_name, app_url, email_id)` objects.
 `app_url` is parsed from the email body; `main.py` passes it directly to the scraper so no name-based
