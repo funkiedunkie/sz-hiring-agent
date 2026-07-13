@@ -81,6 +81,21 @@ def mark_as_read(token, message_id):
         )
 
 
+def mark_read(email_id: str) -> None:
+    """Mark a single email as read after its applicant is fully handled.
+
+    Called by main.py only once the applicant has been logged (or was already
+    logged). Keeping the read-flag until success means a transient failure —
+    e.g. the CareerPlug scraper can't launch — leaves the email UNREAD so the
+    next cron run retries it, instead of silently dropping the candidate.
+    """
+    try:
+        token = get_access_token()
+        mark_as_read(token, email_id)
+    except Exception as e:
+        logger.error("mark_read error for %s: %s", email_id, e)
+
+
 def extract_applicant_name(subject: str) -> str | None:
     """Extract 'John Doe' from 'John Doe - New Applicant for Job Title'."""
     match = re.match(r"^(.+?) - New (?:Fast Track )?Applicant for", subject, re.IGNORECASE)

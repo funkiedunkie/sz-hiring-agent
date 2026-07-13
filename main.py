@@ -14,7 +14,7 @@ from db.supabase_logger import (
 from notifications.email_sender import send_outreach_email
 from notifications.sms_sender import send_interview_invite
 from scrapers.careerplug import scrape_application, scrape_application_by_name
-from triggers.email_trigger import poll_once
+from triggers.email_trigger import poll_once, mark_read
 
 os.makedirs(os.path.join(os.path.dirname(__file__), "logs"), exist_ok=True)
 logging.basicConfig(
@@ -25,8 +25,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def process_applicant(name_or_url: str, dry_run: bool, trigger_subject: str = "") -> None:
-    """Scrape, score, and optionally contact a single applicant."""
+def process_applicant(name_or_url: str, dry_run: bool, trigger_subject: str = "") -> bool:
+    """Scrape, score, and optionally contact a single applicant.
+
+    Returns True if the applicant was fully handled (logged, already logged, or
+    dry run) and the trigger email may be marked read; False on a transient
+    failure (e.g. the scraper couldn't launch) so the caller leaves the email
+    UNREAD and the next cron run retries it instead of dropping the candidate.
+    """
     is_url = name_or_url.startswith("https://")
 
     try:
@@ -35,66 +41,72 @@ def process_applicant(name_or_url: str, dry_run: bool, trigger_subject: str = ""
         else:
             applicant = scrape_application_by_name(name_or_url, headless=True)
     except Exception as exc:
-        logger.error("Scrape failed for %r: %s", name_or_url, exc)
-        return
+        logger.error("Scrape failed for %r: %s — leaving trigger email unread for retry", name_or_url, exc)
+        return False
 
     logger.info("Scraped: %s | %s | %s", applicant.name, applicant.email, applicant.phone)
 
     # Dedup: skip if already logged in Supabase
     if not dry_run and check_applicant_exists(applicant.profile_url):
         logger.info("Already processed %s (%s) — skipping", applicant.name, applicant.profile_url)
-        return
+        return True
 
-    result = score_candidate(
-        application_text=applicant.application_text,
-        candidate_name=applicant.name,
-    )
-
-    stars = "*" * result.score if result.score else "AUTO-DQ"
-    logger.info("Score: %s | auto_dq: %s | %s", stars, result.auto_disqualified, result.reasoning[:120])
-
-    sms_sid = ""
-    invite_sent = False
-    if not result.auto_disqualified and result.score >= config.SCORE_NOTIFY_THRESHOLD:
-        if not applicant.email and not applicant.phone:
-            logger.warning("Qualifying candidate %s has no contact info — alerting manager", applicant.name)
-            if config.MANAGER_PHONE:
-                from notifications.sms_sender import send_sms
-                send_sms(
-                    config.MANAGER_PHONE,
-                    f"Hi Duncan — {applicant.name} scored {result.score}★ but I couldn't scrape their contact info from CareerPlug. "
-                    f"Please add it manually or run: python main.py --repatch --url {applicant.profile_url} — SZ Agent",
-                )
-        elif dry_run:
-            logger.info("[DRY RUN] Would send SMS + email to %s (%s / %s)",
-                        applicant.name, applicant.phone, applicant.email)
-        else:
-            logger.info("%s scored %d stars -- sending outreach", applicant.name, result.score)
-            sms_sid = send_interview_invite(candidate_name=applicant.name, candidate_phone=applicant.phone)
-            send_outreach_email(candidate_name=applicant.name, candidate_email=applicant.email)
-            invite_sent = True
-    else:
-        reason = "auto-disqualified" if result.auto_disqualified else "score %d < threshold %d" % (result.score, config.SCORE_NOTIFY_THRESHOLD)
-        logger.info("Skipping outreach for %s (%s)", applicant.name, reason)
-
-    if dry_run:
-        logger.info("[DRY RUN] Would log to Supabase: %s | score=%s | auto_dq=%s",
-                    applicant.name, result.score, result.auto_disqualified)
-    else:
-        log_applicant(
-            name=applicant.name,
-            email=applicant.email,
-            phone=applicant.phone,
-            profile_url=applicant.profile_url,
+    try:
+        result = score_candidate(
             application_text=applicant.application_text,
-            score=result.score,
-            auto_disqualified=result.auto_disqualified,
-            reasoning=result.reasoning,
-            score_model=result.model,
-            sms_sid=sms_sid,
-            trigger_subject=trigger_subject,
-            invite_sent=invite_sent,
+            candidate_name=applicant.name,
         )
+
+        stars = "*" * result.score if result.score else "AUTO-DQ"
+        logger.info("Score: %s | auto_dq: %s | %s", stars, result.auto_disqualified, result.reasoning[:120])
+
+        sms_sid = ""
+        invite_sent = False
+        if not result.auto_disqualified and result.score >= config.SCORE_NOTIFY_THRESHOLD:
+            if not applicant.email and not applicant.phone:
+                logger.warning("Qualifying candidate %s has no contact info — alerting manager", applicant.name)
+                if config.MANAGER_PHONE:
+                    from notifications.sms_sender import send_sms
+                    send_sms(
+                        config.MANAGER_PHONE,
+                        f"Hi Duncan — {applicant.name} scored {result.score}★ but I couldn't scrape their contact info from CareerPlug. "
+                        f"Please add it manually or run: python main.py --repatch --url {applicant.profile_url} — SZ Agent",
+                    )
+            elif dry_run:
+                logger.info("[DRY RUN] Would send SMS + email to %s (%s / %s)",
+                            applicant.name, applicant.phone, applicant.email)
+            else:
+                logger.info("%s scored %d stars -- sending outreach", applicant.name, result.score)
+                sms_sid = send_interview_invite(candidate_name=applicant.name, candidate_phone=applicant.phone)
+                send_outreach_email(candidate_name=applicant.name, candidate_email=applicant.email)
+                invite_sent = True
+        else:
+            reason = "auto-disqualified" if result.auto_disqualified else "score %d < threshold %d" % (result.score, config.SCORE_NOTIFY_THRESHOLD)
+            logger.info("Skipping outreach for %s (%s)", applicant.name, reason)
+
+        if dry_run:
+            logger.info("[DRY RUN] Would log to Supabase: %s | score=%s | auto_dq=%s",
+                        applicant.name, result.score, result.auto_disqualified)
+        else:
+            log_applicant(
+                name=applicant.name,
+                email=applicant.email,
+                phone=applicant.phone,
+                profile_url=applicant.profile_url,
+                application_text=applicant.application_text,
+                score=result.score,
+                auto_disqualified=result.auto_disqualified,
+                reasoning=result.reasoning,
+                score_model=result.model,
+                sms_sid=sms_sid,
+                trigger_subject=trigger_subject,
+                invite_sent=invite_sent,
+            )
+    except Exception as exc:
+        logger.error("Processing failed for %s: %s — leaving trigger email unread for retry", applicant.name, exc)
+        return False
+
+    return True
 
 
 def repatch(url: str) -> None:
@@ -142,7 +154,9 @@ def run(dry_run: bool = False, direct_url: str = "") -> None:
         logger.info("Hiring agent finished")
         return
 
-    trigger_emails = poll_once(mark_seen=not dry_run)
+    # Poll without marking anything read — we mark each email read only after its
+    # applicant is fully handled, so a transient failure retries next run.
+    trigger_emails = poll_once(mark_seen=False)
     if not trigger_emails:
         logger.info("No trigger emails found -- nothing to do")
         return
@@ -163,7 +177,11 @@ def run(dry_run: bool = False, direct_url: str = "") -> None:
     for trigger in unique_triggers:
         name_or_url = trigger.app_url or trigger.applicant_name
         logger.info("Processing: %s -> %s", trigger.subject, name_or_url)
-        process_applicant(name_or_url, dry_run=dry_run, trigger_subject=trigger.subject)
+        handled = process_applicant(name_or_url, dry_run=dry_run, trigger_subject=trigger.subject)
+        if handled and not dry_run:
+            mark_read(trigger.email_id)
+        elif not handled:
+            logger.warning("Leaving %r unread — will retry next run", trigger.subject)
 
     logger.info("Hiring agent finished")
 

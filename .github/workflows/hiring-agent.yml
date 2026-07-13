@@ -27,12 +27,21 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
+      - name: Resolve installed Playwright version
+        id: pw
+        run: echo "version=$(python -c "import importlib.metadata as m; print(m.version('playwright'))")" >> "$GITHUB_OUTPUT"
+
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-chromium-${{ hashFiles('requirements.txt') }}
+          # Key on the actual installed Playwright version, not requirements.txt.
+          # playwright is unpinned (>=), so pip upgrades it silently; keying on the
+          # resolved version means a browser-build bump busts the cache and forces a
+          # fresh `playwright install`, instead of restoring a stale browser the new
+          # Playwright can't launch.
+          key: playwright-chromium-${{ steps.pw.outputs.version }}
 
       - name: Install Playwright + system deps
         if: steps.playwright-cache.outputs.cache-hit != 'true'
@@ -41,6 +50,9 @@ jobs:
       - name: Install Playwright system deps (cache hit)
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: playwright install-deps chromium
+
+      - name: Verify Playwright browser is present
+        run: python -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(); b.close(); p.stop(); print('chromium OK')"
 
       - name: Run hiring agent
         env:
