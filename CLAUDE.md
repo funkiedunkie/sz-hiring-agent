@@ -319,6 +319,40 @@ create table if not exists messages (
 );
 ```
 
+### Row-Level Security — both tables are RLS-locked with ZERO policies
+
+Migration: `supabase/migrations/20260728182439_enable_rls_on_public_tables.sql`
+
+Supabase auto-exposes every `public` table over PostgREST, and the **anon key is
+not a secret** (it ships in every project and is safe to publish). Before this
+migration, RLS was off, so anyone who knew the project URL could read, edit, and
+delete all candidate PII — names, emails, phones, resume text, scores, and the
+full SMS/email thread.
+
+Every consumer of these tables authenticates with the **service role key**,
+which bypasses RLS entirely:
+
+- `db/supabase_logger.py` — the single shared `_client` used by `main.py`,
+  `backfill.py`, `follow_up.py`, `schedule_interviews.py`, `sync/*`, and
+  `dashboard.py` (which imports `_client` directly)
+- `supabase/functions/calendly-webhook/index.ts`
+- `supabase/functions/twilio-webhook/index.ts`
+
+Nothing uses the anon key and there is no browser-side client, so RLS with **no
+policies** is the correct configuration: `anon` and `authenticated` get nothing,
+the agent keeps full access. The migration also `revoke`s the default PostgREST
+grants from `anon`/`authenticated` as defense in depth, so a future accidental
+permissive policy still can't leak PII.
+
+**Do NOT "fix" the `rls_enabled_no_policy` INFO notice in the Supabase Security
+Advisor by adding a permissive policy.** That notice is expected and correct
+here — adding `using (true)` would re-open the exact hole this migration closed.
+If a browser-side client is ever added, give it its own narrowly-scoped policy.
+
+Because the service role key is now the only thing protecting this data, it must
+never reach git. `set_github_secrets.py` holds it in plaintext and is
+gitignored for that reason.
+
 ## Auto-reply agent — `agents/reply_agent.py`
 
 Runs on every cron tick via `run_auto_reply()` in `notifications/follow_up.py`, before manager notifications.
