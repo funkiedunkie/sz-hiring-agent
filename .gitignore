@@ -12,7 +12,3 @@ build/
 logs/
 supabase/.temp/
 
-# Contains the plaintext SUPABASE_SERVICE_ROLE_KEY and other live secrets.
-# RLS is enabled on every public table, so this key is the ONLY thing standing
-# between the internet and candidate PII — it must never reach git.
-set_github_secrets.py
