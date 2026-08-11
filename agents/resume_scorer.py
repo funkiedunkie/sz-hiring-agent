@@ -47,17 +47,30 @@ AUTO-DISQUALIFY (set auto_disqualified=true, score=0) if ANY of:
   • Completely unrelated work history AND total work experience under 2 years
 
 STAR SCORES (auto_disqualified=false):
-  4 — Two or more RECENT jobs in fitness / wellness / athletics / personal training /
-      physical therapy / sports coaching  OR  applicant is pursuing or has completed
-      an exercise science, kinesiology, or related degree
-  3 — Two or more recent relevant jobs (as above), but no degree in the field
-  2 — Unrelated field BUT consistent tenure (≥1 year per role); OR healthcare-adjacent
-      role (nursing, CNA, massage therapy, etc.); OR single employer with long tenure (≥2 yr)
-  1 — No relevant experience, no notable tenure
+  4 — A degree (completed or actively pursuing) specifically in exercise science,
+      kinesiology, physical therapy, athletic training, or sports medicine —
+      biology, pre-med, nursing, general health, and other non-movement-focused
+      degrees do NOT qualify; certifications alone do NOT substitute for a degree
+  3 — Two or more RECENT paid jobs directly in: personal training, stretch therapy,
+      physical therapy / PT aide, athletic training, sports coaching, or fitness
+      instruction; OR professional personal training certifications (NASM, ACSM,
+      CSCS, ACE, ISSA, etc.) WITH work history showing ≥1 year per role; OR massage
+      therapy WITH work history showing ≥1 year per role — child care, front desk,
+      retail, or food service at a gym/YMCA do NOT count as relevant jobs even if
+      the employer is a wellness venue
+  2 — Professional personal training certifications but work history shows <1 year
+      per role (poor longevity); OR massage therapy but work history shows <1 year
+      per role; OR unrelated field with consistent tenure (≥1 year per role); OR
+      single employer with long tenure (≥2 yr)
+  1 — Weak or tangential connection to health/wellness that prevents auto-DQ but does
+      not meet a higher tier — examples: child care or retail at a wellness venue,
+      a non-qualifying degree with some health relevance (e.g. biology), high school
+      health/sports activities, or GNC/supplement retail
 
-BORDERLINE TIEBREAKER (between 1 and 2, or 2 and 3):
+BORDERLINE TIEBREAKER (between adjacent tiers only):
   Sparse resume with little detail → round down
-  School achievements, sports participation, high GPA, or strong extracurriculars → round up
+  Competitive athletic career at college level or beyond → round up one tier
+  High school extracurriculars, clubs, or sports do NOT count toward rounding up
 
 ─── OUTPUT FORMAT ─────────────────────────────────────────────────────────────
 
