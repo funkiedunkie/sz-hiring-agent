@@ -40,6 +40,22 @@ def check_applicant_exists(profile_url: str) -> bool:
     return len(resp.data) > 0
 
 
+def check_trigger_subject_processed(trigger_subject: str) -> bool:
+    """Return True if an applicant was already logged from this trigger email subject.
+
+    Backstop for the profile_url dedup. When the CareerPlug link in a notification
+    email can't be resolved (the ProofPoint click-tracking redirect is flaky), the
+    trigger has no app_url to dedup on and would re-scrape the same candidate on
+    every cron tick. The subject line ('Sage Moore - New Applicant for ...') is
+    stored on insert and is stable per notification, so it identifies work already
+    done without needing the URL. Blank subjects never match.
+    """
+    if not trigger_subject:
+        return False
+    resp = _client.table(TABLE).select("id").eq("trigger_subject", trigger_subject).execute()
+    return len(resp.data) > 0
+
+
 def find_active_applicant_by_contact(email: str, phone: str) -> dict[str, Any] | None:
     """Return an existing non-archived applicant that shares this email or phone.
 

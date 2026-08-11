@@ -9,6 +9,7 @@ import config
 from agents.resume_scorer import score_candidate
 from db.supabase_logger import (
     log_applicant, check_applicant_exists, find_active_applicant_by_contact,
+    check_trigger_subject_processed,
     get_applicant_by_url, update_contact_info, set_invite_sent,
 )
 from notifications.email_sender import send_outreach_email
@@ -166,8 +167,9 @@ def run(dry_run: bool = False, direct_url: str = "") -> None:
         logger.info("Hiring agent finished")
         return
 
-    # Poll without marking anything read — we mark each email read only after its
-    # applicant is fully handled, so a transient failure retries next run.
+    # Poll without marking anything read. The read flag is a courtesy for the
+    # human reading this mailbox, not the work queue — Supabase is the source of
+    # truth for what has been handled (see the dedup below).
     trigger_emails = poll_once(mark_seen=False)
     if not trigger_emails:
         logger.info("No trigger emails found -- nothing to do")
@@ -187,6 +189,21 @@ def run(dry_run: bool = False, direct_url: str = "") -> None:
         logger.info("Deduplicated to %d unique applicant(s)", len(unique_triggers))
 
     for trigger in unique_triggers:
+        # Cheap dedup before the expensive Playwright scrape: if this exact
+        # application URL is already in Supabase, there is nothing to do. This is
+        # what makes it safe for the trigger to ignore the mailbox read flag.
+        if not dry_run and (
+            (trigger.app_url and check_applicant_exists(trigger.app_url))
+            # No app_url means the CareerPlug link couldn't be resolved and we'd
+            # fall back to a name search — dedup on the subject so an already
+            # handled candidate isn't re-scraped on every tick.
+            or (not trigger.app_url and check_trigger_subject_processed(trigger.subject))
+        ):
+            logger.info("Already processed %s (%s) — skipping",
+                        trigger.applicant_name, trigger.app_url or trigger.subject)
+            mark_read(trigger.email_id)
+            continue
+
         name_or_url = trigger.app_url or trigger.applicant_name
         logger.info("Processing: %s -> %s", trigger.subject, name_or_url)
         handled = process_applicant(name_or_url, dry_run=dry_run, trigger_subject=trigger.subject)

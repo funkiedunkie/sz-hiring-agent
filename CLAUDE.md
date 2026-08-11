@@ -43,7 +43,7 @@ dashboard.py (Streamlit)
 | `triggers/email_trigger.py` | Polls Outlook inbox via Microsoft Graph API |
 | `scrapers/careerplug.py` | Playwright login → scrape application URL; `deactivate_applicant(profile_url, reason)` deactivates a candidate in CareerPlug |
 | `agents/resume_scorer.py` | Claude `claude-sonnet-4-6` scorer |
-| `db/supabase_logger.py` | Insert applicant rows into Supabase; `check_applicant_exists(profile_url)` dedups the same application, `find_active_applicant_by_contact(email, phone)` dedups the same **person** across different postings so they aren't invited twice |
+| `db/supabase_logger.py` | Insert applicant rows into Supabase; `check_applicant_exists(profile_url)` dedups the same application, `find_active_applicant_by_contact(email, phone)` dedups the same **person** across different postings so they aren't invited twice, `check_trigger_subject_processed(subject)` dedups a trigger email whose CareerPlug URL couldn't be resolved |
 | `db/messages_logger.py` | Insert / fetch rows from the `messages` table |
 | `notifications/sms_sender.py` | Twilio SMS: `send_interview_invite()` (templated) + `send_sms(phone, body)` (custom) → returns SID; routes via `messaging_service_sid` when `TWILIO_MESSAGING_SERVICE_SID` is set (A2P 10DLC compliant), falls back to `from_=TWILIO_FROM_NUMBER`; enforces rate limits (global 30/day, per-candidate 3/24h, duplicate suppression 1h) |
 | `notifications/email_sender.py` | Graph API email: `send_outreach_email()` (auto-pipeline, returns bool) + `send_email(to, subject, body)` (dashboard, draft→send, returns Graph message ID for dedup) |
@@ -69,9 +69,9 @@ The trigger uses **Microsoft Graph API** (not IMAP, not Gmail, not `imapclient`)
 - Auth: client-credentials OAuth2 flow (app-only, no user sign-in required)
 - Token endpoint: `https://login.microsoftonline.com/{GRAPH_TENANT_ID}/oauth2/v2.0/token`
 - Mailbox polled: `GRAPH_USER_EMAIL` (the franchise owner's Outlook/M365 account)
-- Watches for unread messages whose subject contains `EMAIL_TRIGGER_SUBJECT` **and** `"New Fast Track Applicant"` (both searched and merged)
+- Searches the inbox for `EMAIL_TRIGGER_SUBJECT` **and** `"New Fast Track Applicant"` (both searched and merged), then keeps only messages whose subject parses into an applicant name (`extract_applicant_name`) and that arrived within `TRIGGER_LOOKBACK_DAYS` (default 7). The Graph `$search` is fuzzy and also matches digests like `"New text messages from your applicants"`; the name-parse requirement drops those silently
 - Fetches the email **body** to extract the CareerPlug application URL (`https://app.careerplug.com/manage/apps/<id>`). CareerPlug notification emails to this mailbox are **ProofPoint URL Defense-wrapped**, so the raw link is never present — `extract_app_url` first tries a direct match, then falls back to `_resolve_wrapped_app_url`, which GETs the wrapped ProofPoint/`email.reply.careerplug.com/c/` links and picks the `manage/apps/<id>` URL out of the redirect chain. Name search is only used if URL resolution fails (and is unreliable — the CareerPlug apps-list search does not always find Fast Track applicants)
-- Marks each email as read via `PATCH /users/{email}/messages/{id}` **only after its applicant is fully handled** (logged to Supabase, already logged, or dry run) — `poll_once` no longer marks during polling. A transient failure (e.g. the CareerPlug scraper can't launch) leaves the email **unread** so the next cron run retries it instead of dropping the candidate. `main.py` calls `mark_read(email_id)` per email on success. Requires `Mail.ReadWrite` permission; logs a warning and continues if missing.
+- **Read state is NOT the work queue.** `fetch_new_applications` deliberately does *not* filter on `isRead`. The mailbox read flag is shared state with a human — when Duncan opened a CareerPlug notification in Outlook before the next cron tick, the email became invisible to the agent permanently and the candidate was dropped silently (this lost **Sage Moore** on 2026-08-10). **Supabase is the source of truth for what has been handled:** `main.py` skips a trigger email when `check_applicant_exists(app_url)` is true, or — when the CareerPlug link can't be resolved (the ProofPoint redirect is flaky and intermittently fails with SSL EOF) — when `check_trigger_subject_processed(subject)` is true. Emails are still marked read via `PATCH /users/{email}/messages/{id}` after an applicant is fully handled, but only as a courtesy for the human reading the mailbox; nothing depends on it. Requires `Mail.ReadWrite`; logs a warning and continues if missing.
 
 `poll_once()` returns a list of `TriggerEmail(subject, applicant_name, app_url, email_id)` objects.
 `app_url` is parsed from the email body; `main.py` passes it directly to the scraper so no name-based
@@ -267,6 +267,7 @@ MANAGER_PHONE                  # Duncan's E.164 phone number; if set, agent text
 # Optional
 EMAIL_TRIGGER_SUBJECT          # default: "New Application"
 SCORE_NOTIFY_THRESHOLD         # default: 1  (invite everyone not auto-DQ'd)
+TRIGGER_LOOKBACK_DAYS          # default: 7  (how far back the email trigger looks for CareerPlug notifications)
 ```
 
 ## Supabase — table schemas

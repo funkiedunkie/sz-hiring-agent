@@ -1,7 +1,9 @@
 import requests
 import time
+import os
 import re
 import logging
+from datetime import datetime, timedelta, timezone
 from config import (
     GRAPH_TENANT_ID,
     GRAPH_CLIENT_ID,
@@ -9,6 +11,11 @@ from config import (
     GRAPH_USER_EMAIL,
     EMAIL_TRIGGER_SUBJECT,
 )
+
+# How far back to consider CareerPlug notification emails. The agent no longer
+# uses the mailbox read flag as its work queue (see fetch_new_applications),
+# so this window plus the Supabase dedup in main.py bounds the work per run.
+TRIGGER_LOOKBACK_DAYS = int(os.getenv("TRIGGER_LOOKBACK_DAYS", "7"))
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 TOKEN_URL = f"https://login.microsoftonline.com/{GRAPH_TENANT_ID}/oauth2/v2.0/token"
@@ -44,23 +51,52 @@ def _search_inbox(token, subject_term):
     return resp.json().get("value", [])
 
 
+def _received_at(message) -> datetime:
+    """Parse a Graph receivedDateTime ('2026-08-10T22:15:31Z') into an aware datetime."""
+    raw = message.get("receivedDateTime", "")
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        # Unparseable timestamp: treat as brand new so we process rather than drop.
+        return datetime.now(timezone.utc)
+
+
 def fetch_new_applications(token):
-    """Poll inbox for unread CareerPlug notification emails.
+    """Return recent CareerPlug applicant-notification emails.
 
     CareerPlug uses two subject templates:
-      - 'Name - New Applicant for <job>'           (EMAIL_TRIGGER_SUBJECT)
+      - 'Name - New Applicant for <job>'            (EMAIL_TRIGGER_SUBJECT)
       - 'Name - New Fast Track Applicant for <job>' (always searched)
     Both are searched and merged so neither template is missed.
+
+    This deliberately does NOT filter on ``isRead``. The mailbox read flag is
+    shared state with a human: when Duncan opened a CareerPlug notification in
+    Outlook before the next cron tick, the email became invisible to the agent
+    permanently and the candidate was silently dropped (this lost Sage Moore on
+    2026-08-10). Idempotency now comes from Supabase instead — ``main.py`` skips
+    any application URL already logged — so re-seeing a handled email is a
+    cheap no-op while an unhandled one keeps getting retried.
+
+    Results are restricted to genuine applicant notifications (subject must
+    parse to a name) received within TRIGGER_LOOKBACK_DAYS.
     """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=TRIGGER_LOOKBACK_DAYS)
     seen_ids = set()
     messages = []
     for term in [EMAIL_TRIGGER_SUBJECT, "New Fast Track Applicant"]:
         for m in _search_inbox(token, term):
-            if m["id"] not in seen_ids:
-                seen_ids.add(m["id"])
-                messages.append(m)
-    # Filter to unread only
-    return [m for m in messages if not m.get("isRead", True)]
+            if m["id"] in seen_ids:
+                continue
+            seen_ids.add(m["id"])
+            # The Graph $search is fuzzy and also matches digests such as
+            # 'New text messages from your applicants'. Requiring the subject to
+            # parse into an applicant name filters those out silently.
+            if not extract_applicant_name(m.get("subject", "")):
+                continue
+            if _received_at(m) < cutoff:
+                continue
+            messages.append(m)
+    return messages
 
 
 def mark_as_read(token, message_id):
